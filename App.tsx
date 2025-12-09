@@ -34,7 +34,14 @@ import {
   Globe,
   Binary,
   Variable,
-  Box
+  Box,
+  Printer,
+  Copy,
+  Clipboard,
+  Bold,
+  Italic,
+  Underline,
+  Trash2
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
@@ -44,25 +51,26 @@ import remarkGfm from 'remark-gfm';
 
 type FileType = 'chat' | 'code' | 'doc' | 'whiteboard' | 'sheet' | 'slide' | 'note' | 'search';
 
+interface TerminalOutput {
+  id: string;
+  type: 'info' | 'error' | 'success' | 'output';
+  content: string;
+  timestamp: number;
+}
+
 interface VirtualFile {
   id: string;
   name: string;
   type: FileType;
-  subtype?: 'python' | 'cpp' | 'matlab';
+  subtype?: 'python' | 'c' | 'matlab';
   content: string; 
+  terminalHistory?: TerminalOutput[]; // Scoped terminal history per file
 }
 
 interface Message {
   role: 'user' | 'model';
   text: string;
   specialist?: string;
-  timestamp: number;
-}
-
-interface TerminalOutput {
-  id: string;
-  type: 'info' | 'error' | 'success' | 'output';
-  content: string;
   timestamp: number;
 }
 
@@ -141,6 +149,72 @@ const Tab = ({ file, active, onClick, onClose }: any) => (
   </div>
 );
 
+// --- Menu Bar Component for Google Tools ---
+
+const MenuBar = ({ onAction }: { onAction: (action: string) => void }) => {
+  const [activeMenu, setActiveMenu] = useState<string | null>(null);
+  
+  const menus = {
+    File: [
+      { label: 'Download', icon: Download, action: 'download' },
+      { label: 'Print', icon: Printer, action: 'print' },
+      { label: 'Move to Trash', icon: Trash2, action: 'clear' },
+    ],
+    Edit: [
+      { label: 'Copy', icon: Copy, action: 'copy' },
+      { label: 'Paste', icon: Clipboard, action: 'paste' },
+    ],
+    View: [
+      { label: 'Fullscreen', icon: Box, action: 'fullscreen' },
+    ],
+    Insert: [
+      { label: 'Date', icon: Plus, action: 'insert_date' },
+      { label: 'Horizontal Line', icon: Plus, action: 'insert_line' },
+    ],
+    Format: [
+      { label: 'Bold', icon: Bold, action: 'bold' },
+      { label: 'Italic', icon: Italic, action: 'italic' },
+      { label: 'Underline', icon: Underline, action: 'underline' },
+    ]
+  };
+
+  return (
+    <div className="flex gap-1 text-sm text-slate-700 px-2 py-1 select-none relative">
+      {Object.entries(menus).map(([name, items]) => (
+        <div key={name} className="relative group">
+          <button 
+            className="px-2 py-1 hover:bg-slate-200 rounded text-slate-800"
+            onClick={() => setActiveMenu(activeMenu === name ? null : name)}
+            onMouseEnter={() => activeMenu && setActiveMenu(name)}
+          >
+            {name}
+          </button>
+          {activeMenu === name && (
+            <div 
+              className="absolute left-0 top-full bg-white shadow-xl border border-slate-200 rounded py-1 min-w-[150px] z-50 flex flex-col"
+              onMouseLeave={() => setActiveMenu(null)}
+            >
+              {items.map(item => (
+                <button 
+                  key={item.label}
+                  className="px-4 py-2 text-left hover:bg-slate-100 flex items-center gap-2 text-xs"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAction(item.action);
+                    setActiveMenu(null);
+                  }}
+                >
+                  <item.icon size={12}/> {item.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 // --- Editors ---
 
 const CodeEditor = ({ file, onChange, onRun }: any) => (
@@ -166,21 +240,47 @@ const CodeEditor = ({ file, onChange, onRun }: any) => (
 );
 
 // High-Fidelity Google Docs Clone
-const DocEditor = ({ file, onChange }: any) => (
-  <div className="flex flex-col h-full bg-[#F9FBFD] overflow-y-auto items-center relative">
+const DocEditor = ({ file, onChange }: any) => {
+  const handleAction = (action: string) => {
+    if (action === 'download') {
+      const blob = new Blob([file.content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name;
+      a.click();
+    } else if (action === 'print') {
+      window.print();
+    } else if (action === 'clear') {
+      onChange('');
+    } else if (action === 'insert_date') {
+      onChange(file.content + '\n' + new Date().toLocaleDateString());
+    } else if (action === 'insert_line') {
+      onChange(file.content + '\n---\n');
+    } else if (action === 'bold') {
+      onChange(file.content + ' **bold** ');
+    } else if (action === 'italic') {
+      onChange(file.content + ' *italic* ');
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-white overflow-y-auto items-center relative">
        {/* Toolbar Simulator */}
-       <div className="w-full bg-[#EDF2FA] border-b border-[#dadce0] px-4 py-2 flex gap-4 text-slate-700 sticky top-0 z-10 shadow-sm">
-           <div className="flex gap-2 items-center text-sm font-medium">
-               <span className="hover:bg-[rgba(26,115,232,0.1)] px-2 py-1 rounded cursor-pointer">File</span>
-               <span className="hover:bg-[rgba(26,115,232,0.1)] px-2 py-1 rounded cursor-pointer">Edit</span>
-               <span className="hover:bg-[rgba(26,115,232,0.1)] px-2 py-1 rounded cursor-pointer">View</span>
-               <span className="hover:bg-[rgba(26,115,232,0.1)] px-2 py-1 rounded cursor-pointer">Insert</span>
-               <span className="hover:bg-[rgba(26,115,232,0.1)] px-2 py-1 rounded cursor-pointer">Format</span>
+       <div className="w-full bg-[#EDF2FA] border-b border-[#dadce0] px-4 py-2 sticky top-0 z-10 shadow-sm flex flex-col gap-1">
+           <div className="flex items-center gap-2 mb-1">
+              <FileText size={18} className="text-[#4285F4]"/>
+              <input 
+                value={file.name.replace(/\.(doc|txt)$/, '')}
+                onChange={(e) => { /* Rename stub */ }}
+                className="bg-transparent text-slate-700 text-sm hover:border border-slate-400 px-1 rounded truncate max-w-[200px]"
+              />
            </div>
+           <MenuBar onAction={handleAction}/>
        </div>
        
        {/* Paper */}
-       <div className="w-[816px] min-h-[1056px] bg-white shadow-lg my-8 p-[96px] text-black">
+       <div className="w-[816px] min-h-[1056px] bg-white shadow-lg my-8 p-[96px] text-black border border-[#e0e0e0]">
            <input 
               value={file.name.replace(/\.(doc|txt)$/, '')}
               onChange={(e) => { /* Rename logic could go here */ }}
@@ -194,59 +294,70 @@ const DocEditor = ({ file, onChange }: any) => (
               placeholder="Type @ to insert"
            />
        </div>
-  </div>
-);
+    </div>
+  );
+};
 
 // High-Fidelity Google Slides Clone
-const SlideEditor = ({ file, onChange }: any) => (
-    <div className="flex flex-col h-full bg-[#F8F9FA] overflow-hidden">
-        {/* Toolbar */}
-        <div className="w-full bg-white border-b border-[#dadce0] px-4 py-2 flex gap-2 items-center text-slate-600">
-           <Plus size={18} className="cursor-pointer hover:bg-slate-100 p-1 rounded box-content"/>
-           <div className="h-4 w-px bg-slate-300 mx-2"></div>
-           <span className="text-xs">Background</span>
-           <span className="text-xs">Layout</span>
-           <span className="text-xs">Theme</span>
-        </div>
+const SlideEditor = ({ file, onChange }: any) => {
+    const handleAction = (action: string) => {
+        if (action === 'download') {
+             // stub
+        } else if (action === 'bold') {
+            onChange(file.content + ' **bold**');
+        }
+    }
 
-        <div className="flex-1 flex overflow-hidden">
-             {/* Filmstrip */}
-             <div className="w-48 bg-white border-r border-[#dadce0] flex flex-col p-4 gap-4 overflow-y-auto">
-                 {[1].map(i => (
-                     <div key={i} className="aspect-[16/9] bg-white border-2 border-[#Fbbc04] shadow-sm flex items-center justify-center text-[10px] text-slate-400 cursor-pointer">
-                         1
-                     </div>
-                 ))}
-             </div>
+    return (
+        <div className="flex flex-col h-full bg-white overflow-hidden">
+            {/* Toolbar */}
+            <div className="w-full bg-white border-b border-[#dadce0] px-4 py-2 flex flex-col gap-1">
+               <div className="flex items-center gap-2">
+                   <Presentation size={18} className="text-[#Fbbc04]"/>
+                   <span className="text-sm text-slate-700">{file.name}</span>
+               </div>
+               <MenuBar onAction={handleAction} />
+            </div>
 
-             {/* Canvas */}
-             <div className="flex-1 bg-[#F8F9FA] flex items-center justify-center p-8 overflow-auto">
-                <div className="w-[960px] h-[540px] bg-white shadow-lg flex flex-col p-16 border border-[#dadce0] relative">
-                    <input 
-                       className="text-5xl font-sans font-bold mb-8 outline-none placeholder-[#dadce0] text-black bg-transparent text-center mt-20" 
-                       placeholder="Click to add title"
-                       value={file.content.split('\n')[0] || ''}
-                       onChange={(e) => {
-                           const lines = file.content.split('\n');
-                           lines[0] = e.target.value;
-                           onChange(lines.join('\n'));
-                       }}
-                    />
-                    <textarea 
-                        className="flex-1 text-2xl font-sans resize-none outline-none placeholder-[#dadce0] text-black bg-transparent text-center"
-                        placeholder="Click to add subtitle"
-                        value={file.content.split('\n').slice(1).join('\n')}
-                        onChange={(e) => {
-                            const lines = file.content.split('\n');
-                            const rest = e.target.value;
-                            onChange(lines[0] + '\n' + rest);
-                        }}
-                    />
-                </div>
-             </div>
+            <div className="flex-1 flex overflow-hidden">
+                 {/* Filmstrip */}
+                 <div className="w-48 bg-white border-r border-[#dadce0] flex flex-col p-4 gap-4 overflow-y-auto">
+                     {[1].map(i => (
+                         <div key={i} className="aspect-[16/9] bg-white border-2 border-[#Fbbc04] shadow-sm flex items-center justify-center text-[10px] text-slate-400 cursor-pointer">
+                             1
+                         </div>
+                     ))}
+                 </div>
+
+                 {/* Canvas */}
+                 <div className="flex-1 bg-[#F8F9FA] flex items-center justify-center p-8 overflow-auto">
+                    <div className="w-[960px] h-[540px] bg-white shadow-lg flex flex-col p-16 border border-[#dadce0] relative">
+                        <input 
+                           className="text-5xl font-sans font-bold mb-8 outline-none placeholder-[#dadce0] text-black bg-transparent text-center mt-20" 
+                           placeholder="Click to add title"
+                           value={file.content.split('\n')[0] || ''}
+                           onChange={(e) => {
+                               const lines = file.content.split('\n');
+                               lines[0] = e.target.value;
+                               onChange(lines.join('\n'));
+                           }}
+                        />
+                        <textarea 
+                            className="flex-1 text-2xl font-sans resize-none outline-none placeholder-[#dadce0] text-black bg-transparent text-center"
+                            placeholder="Click to add subtitle"
+                            value={file.content.split('\n').slice(1).join('\n')}
+                            onChange={(e) => {
+                                const lines = file.content.split('\n');
+                                const rest = e.target.value;
+                                onChange(lines[0] + '\n' + rest);
+                            }}
+                        />
+                    </div>
+                 </div>
+            </div>
         </div>
-    </div>
-);
+    );
+};
 
 // High-Fidelity Google Sheets Clone
 const SheetEditor = ({ file, onChange }: any) => {
@@ -264,18 +375,26 @@ const SheetEditor = ({ file, onChange }: any) => {
     onChange(newGrid.map((row: any[]) => row.join(',')).join('\n'));
   };
 
+  const handleAction = (action: string) => {
+      // Stub
+  }
+
   return (
     <div className="flex flex-col h-full bg-white overflow-hidden font-sans text-xs">
-        <div className="w-full bg-[#f8f9fa] border-b border-[#c0c0c0] px-4 py-1 flex gap-4 text-slate-700 items-center h-8">
-            <span className="font-bold text-[#107c41] flex items-center gap-1"><Table size={14}/> Sheets</span>
-            <div className="h-4 w-px bg-slate-300"></div>
-            <div className="flex gap-2">
-                <span className="font-bold">B</span>
-                <span className="italic font-serif">I</span>
-                <span className="line-through">S</span>
-                <span className="text-[#1a73e8]">A</span>
+        <div className="w-full bg-[#f8f9fa] border-b border-[#c0c0c0] px-4 py-1 flex flex-col gap-1">
+            <div className="flex items-center gap-2 h-8">
+                <Table size={18} className="text-[#107c41]"/>
+                <span className="text-sm text-slate-700">{file.name}</span>
             </div>
+            <MenuBar onAction={handleAction}/>
         </div>
+        
+        {/* Formula Bar */}
+        <div className="flex items-center h-8 bg-white border-b border-[#e0e0e0] px-2 gap-2">
+            <span className="font-bold text-slate-400">fx</span>
+            <input className="flex-1 h-6 border border-[#e0e0e0] px-2 focus:outline-none focus:border-[#1a73e8]" placeholder=""/>
+        </div>
+
         <div className="flex items-center h-6 bg-[#f8f9fa] border-b border-[#c0c0c0]">
              <div className="w-10 bg-[#f8f9fa] border-r border-[#c0c0c0]"></div>
              <div className="flex-1 flex overflow-hidden">
@@ -286,7 +405,7 @@ const SheetEditor = ({ file, onChange }: any) => {
                 ))}
              </div>
         </div>
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 overflow-auto bg-white">
           {grid.map((row: any[], r: number) => (
             <div key={r} className="flex h-6 border-b border-[#e0e0e0]">
                <div className="w-10 min-w-[40px] bg-[#f8f9fa] border-r border-[#c0c0c0] text-center text-slate-500 flex items-center justify-center font-semibold">{r + 1}</div>
@@ -295,7 +414,7 @@ const SheetEditor = ({ file, onChange }: any) => {
                     key={`${r}-${c}`}
                     value={cell}
                     onChange={(e) => handleCellChange(r, c, e.target.value)}
-                    className="min-w-[100px] border-r border-[#e0e0e0] px-1 focus:outline-none focus:border-[#1a73e8] focus:ring-2 focus:ring-[#1a73e8] text-black z-0 focus:z-10"
+                    className="min-w-[100px] border-r border-[#e0e0e0] px-1 focus:outline-none focus:border-[#1a73e8] focus:ring-2 focus:ring-[#1a73e8] text-black z-0 focus:z-10 bg-white"
                   />
                ))}
             </div>
@@ -353,7 +472,7 @@ const WhiteboardEditor = ({ file, onChange }: any) => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#f8f9fa] relative">
+    <div className="flex flex-col h-full bg-white relative">
         <div className="absolute top-4 left-4 bg-white shadow rounded-lg p-2 flex gap-2 z-10 border">
              <button className="p-2 hover:bg-slate-100 rounded text-slate-600"><PenTool size={16}/></button>
              <button className="p-2 hover:bg-slate-100 rounded text-slate-600"><Eraser size={16}/></button>
@@ -363,7 +482,7 @@ const WhiteboardEditor = ({ file, onChange }: any) => {
                  if(ctx) { ctx.fillStyle="#fff"; ctx.fillRect(0,0,2000,2000); save(); }
              }}>Clear</button>
         </div>
-        <div className="flex-1 overflow-auto flex items-center justify-center p-8">
+        <div className="flex-1 overflow-auto flex items-center justify-center p-8 bg-white">
            <canvas 
               ref={canvasRef}
               width={1600}
@@ -372,7 +491,7 @@ const WhiteboardEditor = ({ file, onChange }: any) => {
               onMouseMove={draw}
               onMouseUp={stopDrawing}
               onMouseLeave={stopDrawing}
-              className="bg-white shadow-xl cursor-crosshair"
+              className="bg-white shadow-xl cursor-crosshair border border-slate-200"
            />
         </div>
     </div>
@@ -438,7 +557,7 @@ const SearchEditor = ({ file, onChange, apiKey }: any) => {
                     </button>
                 </div>
 
-                <div className="prose prose-slate max-w-none">
+                <div className="prose prose-slate max-w-none text-black">
                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{results}</ReactMarkdown>
                 </div>
             </div>
@@ -452,7 +571,7 @@ const SearchEditor = ({ file, onChange, apiKey }: any) => {
 export default function App() {
   const [apiKey, setApiKey] = useState(process.env.API_KEY || '');
   const [files, setFiles] = useState<VirtualFile[]>([
-    { id: '1', name: 'MWI_Chat', type: 'chat', content: JSON.stringify([]) },
+    { id: '1', name: 'MWI_Chat', type: 'chat', content: JSON.stringify([]), terminalHistory: [] },
   ]);
   const [openTabIds, setOpenTabIds] = useState<string[]>(['1']);
   const [activeTabId, setActiveTabId] = useState<string>('1');
@@ -461,7 +580,6 @@ export default function App() {
   const [isDevMenuOpen, setIsDevMenuOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentSpecialist, setCurrentSpecialist] = useState("The Liaison");
-  const [terminalOutput, setTerminalOutput] = useState<TerminalOutput[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [projectFolderOpen, setProjectFolderOpen] = useState(true);
   
@@ -470,14 +588,25 @@ export default function App() {
 
   // -- Helpers --
 
-  const addTerminalLog = (content: string, type: 'info' | 'error' | 'success' | 'output' = 'info') => {
-    setTerminalOutput(prev => [...prev, { id: Math.random().toString(), content, type, timestamp: Date.now() }]);
+  const addTerminalLog = (fileId: string, content: string, type: 'info' | 'error' | 'success' | 'output' = 'info') => {
+    setFiles(prev => prev.map(f => {
+        if(f.id !== fileId) return f;
+        const history = f.terminalHistory || [];
+        return { 
+            ...f, 
+            terminalHistory: [...history, { id: Math.random().toString(), content, type, timestamp: Date.now() }] 
+        };
+    }));
   };
 
-  const createNewFile = (type: FileType, subtype?: 'python' | 'cpp' | 'matlab', name?: string, content: string = '') => {
+  const clearTerminal = (fileId: string) => {
+      setFiles(prev => prev.map(f => f.id === fileId ? { ...f, terminalHistory: [] } : f));
+  };
+
+  const createNewFile = (type: FileType, subtype?: 'python' | 'c' | 'matlab', name?: string, content: string = '') => {
     const newId = Math.random().toString(36).substr(2, 9);
     const extensions: Record<string, string> = { 
-        code: subtype === 'python' ? 'py' : subtype === 'cpp' ? 'cpp' : subtype === 'matlab' ? 'm' : 'code', 
+        code: subtype === 'python' ? 'py' : subtype === 'c' ? 'c' : subtype === 'matlab' ? 'm' : 'code', 
         doc: 'doc', 
         sheet: 'csv', 
         whiteboard: 'board', 
@@ -491,7 +620,7 @@ export default function App() {
     const initialContent = content || (
         type === 'sheet' ? 'Header 1,Header 2,Header 3\nData 1,Data 2,Data 3' : 
         type === 'chat' ? '[]' : 
-        type === 'code' ? (subtype === 'python' ? '# Python Script\nprint("Hello World")' : subtype === 'cpp' ? '// C++ Source\n#include <iostream>\n' : '% MATLAB Script\n') : 
+        type === 'code' ? (subtype === 'python' ? '# Python Script\nprint("Hello World")' : subtype === 'c' ? '// C Source\n#include <stdio.h>\n\nint main() {\n    printf("Hello World");\n    return 0;\n}' : '% MATLAB Script\ndisp("Hello World")') : 
         type === 'slide' ? 'Title Slide\nSubtitle goes here' : ''
     );
 
@@ -500,7 +629,8 @@ export default function App() {
       name: fileName,
       type,
       subtype,
-      content: initialContent
+      content: initialContent,
+      terminalHistory: []
     };
     setFiles(prev => [...prev, newFile]);
     setOpenTabIds(prev => [...prev, newId]);
@@ -514,18 +644,23 @@ export default function App() {
     setFiles(prev => prev.map(f => f.id === id ? { ...f, content } : f));
   };
 
-  const runCode = async (code: string, fileName: string) => {
-    addTerminalLog(`> Executing ${fileName}...`, 'info');
+  const runCode = async (code: string, fileName: string, subtype?: string, fileId?: string) => {
+    if(!fileId) return;
+    addTerminalLog(fileId, `> Executing ${fileName}...`, 'info');
     try {
       const ai = new GoogleGenAI({ apiKey });
-      const prompt = `ACT AS A PYTHON INTERPRETER. Execute:\n${code}`;
+      let systemPrompt = `ACT AS A PYTHON INTERPRETER. Execute the code and return ONLY the output.`;
+      if (subtype === 'c') systemPrompt = `ACT AS A C COMPILER. Compile and run the following C code. Return ONLY the output of the program.`;
+      if (subtype === 'matlab') systemPrompt = `ACT AS A MATLAB CONSOLE. Execute the following MATLAB script and return ONLY the output.`;
+
+      const prompt = `${systemPrompt}\n\nCODE:\n${code}`;
       const response = await ai.models.generateContent({
         model: 'gemini-3-pro-preview',
         contents: prompt
       });
-      addTerminalLog(response.text || "No output", 'output');
+      addTerminalLog(fileId, response.text || "No output", 'output');
     } catch (error: any) {
-      addTerminalLog(`Execution failed: ${error.message}`, 'error');
+      addTerminalLog(fileId, `Execution failed: ${error.message}`, 'error');
     }
   };
 
@@ -600,7 +735,7 @@ export default function App() {
             {history.length === 0 && (
                 <div className="flex flex-col items-center justify-center mt-32 text-[#444]">
                     <Bot size={72} strokeWidth={1} />
-                    <h2 className="text-2xl font-light tracking-widest mt-6 uppercase">OmniScience v2.2</h2>
+                    <h2 className="text-2xl font-light tracking-widest mt-6 uppercase">OmniScience v2.3</h2>
                     <p className="text-sm mt-2">Ready for inquiry.</p>
                 </div>
             )}
@@ -763,8 +898,8 @@ export default function App() {
                              <button onClick={() => createNewFile('code', 'python')} className="flex flex-col items-center p-2 bg-[#2a2d2e] hover:bg-[#37373d] rounded text-[10px] gap-1 text-yellow-300">
                                  <Box size={16}/> Python
                              </button>
-                             <button onClick={() => createNewFile('code', 'cpp')} className="flex flex-col items-center p-2 bg-[#2a2d2e] hover:bg-[#37373d] rounded text-[10px] gap-1 text-blue-500">
-                                 <Cpu size={16}/> C++
+                             <button onClick={() => createNewFile('code', 'c')} className="flex flex-col items-center p-2 bg-[#2a2d2e] hover:bg-[#37373d] rounded text-[10px] gap-1 text-blue-500">
+                                 <Cpu size={16}/> C
                              </button>
                              <button onClick={() => createNewFile('code', 'matlab')} className="flex flex-col items-center p-2 bg-[#2a2d2e] hover:bg-[#37373d] rounded text-[10px] gap-1 text-orange-600">
                                  <Variable size={16}/> MATLAB
@@ -828,7 +963,7 @@ export default function App() {
                             <CodeEditor 
                                 file={activeFile} 
                                 onChange={(val: string) => updateFileContent(activeFile.id, val)} 
-                                onRun={() => runCode(activeFile.content, activeFile.name)}
+                                onRun={() => runCode(activeFile.content, activeFile.name, activeFile.subtype, activeFile.id)}
                             />
                         )}
                         {(activeFile.type === 'doc' || activeFile.type === 'note') && (
@@ -878,13 +1013,12 @@ export default function App() {
                           <div className="flex gap-4 text-[10px] font-bold text-[#969696] uppercase tracking-wide">
                               <span className="cursor-pointer border-b border-white text-white">Terminal</span>
                               <span className="hover:text-white cursor-pointer">Output</span>
-                              <span className="hover:text-white cursor-pointer">Debug Console</span>
                           </div>
-                          <button onClick={() => setTerminalOutput([])} className="text-xs text-slate-500 hover:text-white"><Eraser size={12}/></button>
+                          <button onClick={() => clearTerminal(activeFile.id)} className="text-xs text-slate-500 hover:text-white"><Eraser size={12}/></button>
                       </div>
                       <div className="flex-1 overflow-y-auto p-3 font-mono text-xs space-y-1">
-                          {terminalOutput.length === 0 && <div className="text-slate-600 italic">Ready for input...</div>}
-                          {terminalOutput.map((log) => (
+                          {(!activeFile.terminalHistory || activeFile.terminalHistory.length === 0) && <div className="text-slate-600 italic">Ready for input...</div>}
+                          {activeFile.terminalHistory?.map((log) => (
                               <div key={log.id} className={`${log.type === 'error' ? 'text-red-400' : log.type === 'success' ? 'text-green-400' : log.type === 'output' ? 'text-indigo-300' : 'text-slate-400'}`}>
                                   <span className="opacity-40 mr-2 select-none">❯</span>
                                   {log.content}
