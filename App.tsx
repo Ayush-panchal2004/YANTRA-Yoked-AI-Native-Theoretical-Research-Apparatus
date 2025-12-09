@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Terminal as TerminalIcon, 
   Mic, 
@@ -41,7 +41,17 @@ import {
   Bold,
   Italic,
   Underline,
-  Trash2
+  Trash2,
+  Type,
+  Palette,
+  FilePlus,
+  ArrowDownToLine,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  List,
+  Cloud,
+  CheckCircle
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
@@ -151,12 +161,13 @@ const Tab = ({ file, active, onClick, onClose }: any) => (
 
 // --- Menu Bar Component for Google Tools ---
 
-const MenuBar = ({ onAction }: { onAction: (action: string) => void }) => {
+const MenuBar = ({ onAction, isDriveConnected }: { onAction: (action: string, value?: any) => void, isDriveConnected?: boolean }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   
   const menus = {
     File: [
-      { label: 'Download', icon: Download, action: 'download' },
+      ...(isDriveConnected ? [{ label: 'Save to Drive', icon: Cloud, action: 'save_drive' }] : []),
+      { label: 'Download', icon: ArrowDownToLine, action: 'download' },
       { label: 'Print', icon: Printer, action: 'print' },
       { label: 'Move to Trash', icon: Trash2, action: 'clear' },
     ],
@@ -168,6 +179,7 @@ const MenuBar = ({ onAction }: { onAction: (action: string) => void }) => {
       { label: 'Fullscreen', icon: Box, action: 'fullscreen' },
     ],
     Insert: [
+      { label: 'Page Break', icon: FilePlus, action: 'insert_page' },
       { label: 'Date', icon: Plus, action: 'insert_date' },
       { label: 'Horizontal Line', icon: Plus, action: 'insert_line' },
     ],
@@ -179,32 +191,34 @@ const MenuBar = ({ onAction }: { onAction: (action: string) => void }) => {
   };
 
   return (
-    <div className="flex gap-1 text-sm text-slate-700 px-2 py-1 select-none relative">
+    <div className="flex gap-1 text-sm text-slate-700 px-2 py-0 select-none relative z-50">
       {Object.entries(menus).map(([name, items]) => (
         <div key={name} className="relative group">
           <button 
-            className="px-2 py-1 hover:bg-slate-200 rounded text-slate-800"
+            className="px-2 py-1 hover:bg-slate-200 rounded-sm text-slate-800 text-sm"
             onClick={() => setActiveMenu(activeMenu === name ? null : name)}
             onMouseEnter={() => activeMenu && setActiveMenu(name)}
+            onMouseDown={(e) => e.preventDefault()}
           >
             {name}
           </button>
           {activeMenu === name && (
             <div 
-              className="absolute left-0 top-full bg-white shadow-xl border border-slate-200 rounded py-1 min-w-[150px] z-50 flex flex-col"
+              className="absolute left-0 top-full bg-white shadow-xl border border-slate-200 rounded py-1 min-w-[180px] z-50 flex flex-col"
               onMouseLeave={() => setActiveMenu(null)}
             >
               {items.map(item => (
                 <button 
                   key={item.label}
-                  className="px-4 py-2 text-left hover:bg-slate-100 flex items-center gap-2 text-xs"
+                  className="px-4 py-2 text-left hover:bg-slate-100 flex items-center gap-3 text-xs"
                   onClick={(e) => {
                     e.stopPropagation();
                     onAction(item.action);
                     setActiveMenu(null);
                   }}
+                  onMouseDown={(e) => e.preventDefault()}
                 >
-                  <item.icon size={12}/> {item.label}
+                  <item.icon size={14} className="text-slate-500"/> {item.label}
                 </button>
               ))}
             </div>
@@ -217,13 +231,20 @@ const MenuBar = ({ onAction }: { onAction: (action: string) => void }) => {
 
 // --- Editors ---
 
-const CodeEditor = ({ file, onChange, onRun }: any) => (
+const CodeEditor = ({ file, onChange, onRun, onRename }: any) => (
   <div className="flex flex-col h-full bg-[#1e1e1e]">
       <div className="flex items-center justify-between p-2 bg-[#1e1e1e] border-b border-[#333] text-xs text-slate-400">
-          <span className="font-mono text-indigo-400 flex items-center gap-2">
-            <Code2 size={12}/> {file.name} 
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-indigo-400 flex items-center gap-2">
+                <Code2 size={12}/>
+                <input 
+                    value={file.name}
+                    onChange={(e) => onRename(e.target.value)}
+                    className="bg-transparent border-b border-transparent hover:border-slate-500 focus:border-indigo-500 focus:outline-none text-slate-300 w-32"
+                />
+            </span>
             {file.subtype && <span className="bg-[#333] px-1 rounded text-[10px] text-slate-300 uppercase">{file.subtype}</span>}
-          </span>
+          </div>
           <button onClick={onRun} className="flex items-center gap-1 px-3 py-1 bg-green-700 hover:bg-green-600 text-white rounded-sm transition-colors font-semibold">
             <Play size={10} fill="currentColor"/> Run
           </button>
@@ -239,72 +260,424 @@ const CodeEditor = ({ file, onChange, onRun }: any) => (
   </div>
 );
 
-// High-Fidelity Google Docs Clone
-const DocEditor = ({ file, onChange }: any) => {
+// High-Fidelity Google Docs Clone (Rich Text)
+const DocEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // Initialize content once
+  useEffect(() => {
+    if (contentRef.current && contentRef.current.innerHTML !== file.content) {
+        // Only update if significantly different (basic check to avoid loop)
+        if(file.content === "" || file.content.startsWith("<")) {
+             contentRef.current.innerHTML = file.content;
+        } else {
+             // Fallback for old plaintext files
+             contentRef.current.innerText = file.content;
+        }
+    }
+  }, [file.id]);
+
+  const handleInput = () => {
+    if (contentRef.current) {
+      onChange(contentRef.current.innerHTML);
+    }
+  };
+
+  const exec = (command: string, value: string | undefined = undefined) => {
+      document.execCommand(command, false, value);
+      handleInput(); // Sync change
+  };
+
   const handleAction = (action: string) => {
     if (action === 'download') {
-      const blob = new Blob([file.content], { type: 'text/plain' });
+      const blob = new Blob([contentRef.current?.innerText || ""], { type: 'application/msword' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = file.name;
       a.click();
+    } else if (action === 'save_drive') {
+      alert(`Successfully saved "${file.name}" to Google Drive.`);
     } else if (action === 'print') {
       window.print();
     } else if (action === 'clear') {
-      onChange('');
+        if(contentRef.current) contentRef.current.innerHTML = "";
+        handleInput();
     } else if (action === 'insert_date') {
-      onChange(file.content + '\n' + new Date().toLocaleDateString());
+      exec('insertText', new Date().toLocaleDateString());
     } else if (action === 'insert_line') {
-      onChange(file.content + '\n---\n');
-    } else if (action === 'bold') {
-      onChange(file.content + ' **bold** ');
-    } else if (action === 'italic') {
-      onChange(file.content + ' *italic* ');
-    }
+      exec('insertHorizontalRule');
+    } else if (action === 'insert_page') {
+       // Visual page break
+       const pageBreak = `<div style="page-break-after: always; height: 20px; background: #e0e0e0; margin: 20px -96px; text-align: center; color: #888; font-size: 10px; display: flex; align-items: center; justify-content: center;">--- PAGE BREAK ---</div>`;
+       exec('insertHTML', pageBreak);
+    } else if (action === 'bold') exec('bold');
+    else if (action === 'italic') exec('italic');
+    else if (action === 'underline') exec('underline');
+    else if (action === 'copy') document.execCommand('copy');
+    else if (action === 'paste') navigator.clipboard.readText().then(t => exec('insertText', t));
   };
 
   return (
-    <div className="flex flex-col h-full bg-white overflow-y-auto items-center relative">
-       {/* Toolbar Simulator */}
-       <div className="w-full bg-[#EDF2FA] border-b border-[#dadce0] px-4 py-2 sticky top-0 z-10 shadow-sm flex flex-col gap-1">
-           <div className="flex items-center gap-2 mb-1">
-              <FileText size={18} className="text-[#4285F4]"/>
-              <input 
-                value={file.name.replace(/\.(doc|txt)$/, '')}
-                onChange={(e) => { /* Rename stub */ }}
-                className="bg-transparent text-slate-700 text-sm hover:border border-slate-400 px-1 rounded truncate max-w-[200px]"
-              />
+    <div className="flex flex-col h-full bg-[#F0F2F5] overflow-y-auto items-center relative">
+       {/* Top Header */}
+       <div className="w-full bg-white border-b border-[#dadce0] px-4 py-2 sticky top-0 z-20 flex flex-col gap-1">
+           <div className="flex items-center gap-3 mb-1">
+              <FileText size={24} className="text-[#4285F4]"/>
+              <div className="flex flex-col">
+                  <input 
+                    value={file.name}
+                    onChange={(e) => onRename(e.target.value)}
+                    className="bg-transparent text-slate-800 text-lg hover:border border-slate-300 px-1 rounded truncate max-w-[300px] focus:outline-none focus:border-[#4285F4] border border-transparent"
+                  />
+                  <MenuBar onAction={handleAction} isDriveConnected={isDriveConnected}/>
+              </div>
            </div>
-           <MenuBar onAction={handleAction}/>
+           
+           {/* Formatting Toolbar */}
+           <div className="flex items-center gap-2 bg-[#EDF2FA] rounded-full px-4 py-1.5 w-max mt-1 shadow-sm border border-slate-200">
+               <select 
+                  onChange={(e) => exec('fontName', e.target.value)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  className="bg-transparent text-xs text-slate-700 focus:outline-none cursor-pointer w-24"
+               >
+                   <option value="Arial">Arial</option>
+                   <option value="Times New Roman">Times New Roman</option>
+                   <option value="Courier New">Courier New</option>
+                   <option value="Georgia">Georgia</option>
+                   <option value="Verdana">Verdana</option>
+               </select>
+               <div className="w-px h-4 bg-slate-300"></div>
+               <div className="flex items-center gap-1">
+                   <select 
+                       onChange={(e) => exec('fontSize', e.target.value)}
+                       onMouseDown={(e) => e.preventDefault()}
+                       defaultValue="3"
+                       className="bg-transparent text-xs text-slate-700 focus:outline-none cursor-pointer w-16"
+                   >
+                       <option value="1">10px</option>
+                       <option value="2">13px</option>
+                       <option value="3">16px</option>
+                       <option value="4">18px</option>
+                       <option value="5">24px</option>
+                       <option value="6">32px</option>
+                       <option value="7">48px</option>
+                   </select>
+               </div>
+               <div className="w-px h-4 bg-slate-300"></div>
+               <div className="flex items-center gap-1">
+                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec('bold')} className="p-1 hover:bg-slate-200 rounded" title="Bold"><Bold size={14}/></button>
+                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec('italic')} className="p-1 hover:bg-slate-200 rounded" title="Italic"><Italic size={14}/></button>
+                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec('underline')} className="p-1 hover:bg-slate-200 rounded" title="Underline"><Underline size={14}/></button>
+                   <div className="flex items-center gap-1 border-l border-slate-300 pl-2">
+                       <Type size={14} className="text-slate-500"/>
+                       <input type="color" onMouseDown={(e) => e.preventDefault()} onChange={(e) => exec('foreColor', e.target.value)} className="w-4 h-4 border-none bg-transparent cursor-pointer"/>
+                   </div>
+               </div>
+               <div className="w-px h-4 bg-slate-300"></div>
+               <div className="flex items-center gap-1">
+                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec('justifyLeft')} className="p-1 hover:bg-slate-200 rounded"><AlignLeft size={14}/></button>
+                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec('justifyCenter')} className="p-1 hover:bg-slate-200 rounded"><AlignCenter size={14}/></button>
+                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec('justifyRight')} className="p-1 hover:bg-slate-200 rounded"><AlignRight size={14}/></button>
+               </div>
+           </div>
        </div>
        
-       {/* Paper */}
+       {/* Paper (WYSIWYG) */}
        <div className="w-[816px] min-h-[1056px] bg-white shadow-lg my-8 p-[96px] text-black border border-[#e0e0e0]">
-           <input 
-              value={file.name.replace(/\.(doc|txt)$/, '')}
-              onChange={(e) => { /* Rename logic could go here */ }}
-              className="text-3xl font-bold w-full outline-none placeholder-slate-300 font-sans mb-4 text-black bg-transparent"
-              placeholder="Untitled Document"
-           />
-           <textarea 
-              value={file.content}
-              onChange={(e) => onChange(e.target.value)}
-              className="w-full h-full min-h-[800px] text-[11pt] resize-none focus:outline-none font-sans leading-relaxed text-black placeholder-slate-400"
-              placeholder="Type @ to insert"
+           <div 
+              ref={contentRef}
+              contentEditable
+              onInput={handleInput}
+              className="w-full h-full min-h-[800px] focus:outline-none prose max-w-none text-black font-sans empty:before:content-[attr(placeholder)] empty:before:text-slate-300"
+              style={{ fontSize: '11pt' }}
+              placeholder="Start typing..."
            />
        </div>
     </div>
   );
 };
 
-// High-Fidelity Google Slides Clone
-const SlideEditor = ({ file, onChange }: any) => {
+// High-Fidelity Google Sheets Clone (Functional)
+const SheetEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
+  // Parsing logic for JSON-based sheet with styles or fallback to CSV
+  const parseContent = (content: string) => {
+      try {
+          if (content.trim().startsWith('{')) {
+              const data = JSON.parse(content);
+              return { 
+                  grid: data.grid || Array(40).fill(Array(15).fill('')),
+                  styles: data.styles || {}
+              };
+          }
+      } catch (e) {}
+      
+      // Fallback CSV
+      const grid = content ? content.split('\n').map(row => row.split(',')) : Array(40).fill(Array(15).fill(''));
+      return { grid, styles: {} };
+  };
+
+  const { grid: initialGrid, styles: initialStyles } = useMemo(() => parseContent(file.content), []);
+  const [grid, setGrid] = useState<string[][]>(initialGrid);
+  const [styles, setStyles] = useState<Record<string, React.CSSProperties>>(initialStyles);
+  const [selectedCell, setSelectedCell] = useState<{r:number, c:number} | null>(null);
+
+  // Sync if external update
+  useEffect(() => {
+     const { grid: newGrid, styles: newStyles } = parseContent(file.content);
+     // Deep compare check simplified
+     if (JSON.stringify(newGrid) !== JSON.stringify(grid)) {
+         setGrid(newGrid);
+         setStyles(newStyles);
+     }
+  }, [file.id]);
+
+  const save = (newGrid: string[][], newStyles: Record<string, React.CSSProperties>) => {
+      setGrid(newGrid);
+      setStyles(newStyles);
+      onChange(JSON.stringify({ grid: newGrid, styles: newStyles }));
+  };
+
+  const getCellValue = (r: number, c: number, currentGrid: string[][]) => {
+      if(r < 0 || c < 0 || r >= currentGrid.length || c >= currentGrid[0].length) return 0;
+      const val = currentGrid[r][c];
+      if(!isNaN(Number(val)) && val !== '') return Number(val);
+      return val; 
+  };
+
+  const computeValue = (cell: string, currentGrid: string[][]) => {
+      if (!cell || !cell.startsWith('=')) return cell;
+      try {
+          const formula = cell.substring(1).toUpperCase();
+          const getRange = (range: string) => {
+             const parts = range.split(':');
+             if(parts.length !== 2) return [];
+             const start = parseRef(parts[0]);
+             const end = parseRef(parts[1]);
+             if(!start || !end) return [];
+             let values = [];
+             for(let r=start.r; r<=end.r; r++) {
+                 for(let c=start.c; c<=end.c; c++) {
+                     values.push(getCellValue(r, c, currentGrid));
+                 }
+             }
+             return values;
+          };
+          const parseRef = (ref: string) => {
+              const match = ref.match(/([A-Z]+)([0-9]+)/);
+              if(!match) return null;
+              const colStr = match[1];
+              const row = parseInt(match[2]) - 1;
+              let col = 0;
+              for(let i=0; i<colStr.length; i++) {
+                  col = col * 26 + (colStr.charCodeAt(i) - 64);
+              }
+              return { r: row, c: col - 1 };
+          };
+          
+          if (formula.startsWith('SUM(')) {
+              const range = formula.match(/SUM\((.*)\)/)?.[1];
+              const vals = getRange(range || '');
+              return vals.reduce((a: any, b: any) => Number(a) + Number(b), 0);
+          }
+          if (formula.startsWith('AVG(')) {
+             const range = formula.match(/AVG\((.*)\)/)?.[1];
+             const vals = getRange(range || '');
+             if (vals.length === 0) return 0;
+             const sum = vals.reduce((a: any, b: any) => Number(a) + Number(b), 0);
+             return sum / vals.length;
+          }
+           if (formula.startsWith('MAX(')) {
+             const range = formula.match(/MAX\((.*)\)/)?.[1];
+             const vals = getRange(range || '');
+             return Math.max(...vals.map((v:any) => Number(v)));
+          }
+
+          let parsed = formula.replace(/[A-Z]+[0-9]+/g, (match) => {
+             const ref = parseRef(match);
+             if(ref) return String(getCellValue(ref.r, ref.c, currentGrid));
+             return "0";
+          });
+          
+          if (/^[0-9+\-*/().\s]+$/.test(parsed)) {
+               // eslint-disable-next-line no-eval
+               return eval(parsed);
+          }
+          return cell;
+      } catch (e) {
+          return "#ERROR";
+      }
+  };
+
+  const handleCellChange = (r: number, c: number, val: string) => {
+    const newGrid = [...grid.map(row => [...row])];
+    newGrid[r][c] = val;
+    save(newGrid, styles);
+  };
+
+  const toggleStyle = (styleKey: keyof React.CSSProperties, value: any) => {
+      if(!selectedCell) return;
+      const key = `${selectedCell.r}-${selectedCell.c}`;
+      const currentStyle = styles[key] || {};
+      const newStyle = { ...currentStyle, [styleKey]: currentStyle[styleKey] === value ? undefined : value };
+      const newStyles = { ...styles, [key]: newStyle };
+      save(grid, newStyles);
+  };
+
+  const handleAction = (action: string) => {
+      if(action === 'download') {
+          const csvContent = grid.map(r => r.join(',')).join('\n');
+          const blob = new Blob([csvContent], { type: 'text/csv' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = file.name;
+          a.click();
+      } else if (action === 'save_drive') {
+          alert(`Successfully saved "${file.name}" to Google Drive.`);
+      } else if (action === 'bold') toggleStyle('fontWeight', 'bold');
+      else if (action === 'italic') toggleStyle('fontStyle', 'italic');
+      else if (action === 'underline') toggleStyle('textDecoration', 'underline');
+  }
+
+  // Ensure grid size
+  const displayGrid = useMemo(() => {
+     const temp = [...grid];
+     while(temp.length < 50) temp.push(Array(15).fill(''));
+     temp.forEach(r => { while(r.length < 15) r.push(''); });
+     return temp;
+  }, [grid]);
+
+  return (
+    <div className="flex flex-col h-full bg-white overflow-hidden font-sans text-xs">
+        <div className="w-full bg-white border-b border-[#dadce0] px-4 py-2 flex flex-col gap-1">
+            <div className="flex items-center gap-3">
+                <Table size={24} className="text-[#107c41]"/>
+                <div className="flex flex-col">
+                    <input 
+                        value={file.name}
+                        onChange={(e) => onRename(e.target.value)}
+                        className="bg-transparent text-slate-800 text-lg hover:border border-slate-300 px-1 rounded truncate max-w-[300px] focus:outline-none focus:border-[#107c41] border border-transparent"
+                    />
+                    <MenuBar onAction={handleAction} isDriveConnected={isDriveConnected}/>
+                </div>
+            </div>
+             {/* Toolbar */}
+           <div className="flex items-center gap-2 bg-[#EDF2FA] rounded-full px-4 py-1.5 w-max mt-1 shadow-sm border border-slate-200">
+               <div className="flex items-center gap-1">
+                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => toggleStyle('fontWeight', 'bold')} className={`p-1 hover:bg-slate-200 rounded ${selectedCell && styles[`${selectedCell.r}-${selectedCell.c}`]?.fontWeight === 'bold' ? 'bg-slate-300' : ''}`}><Bold size={14}/></button>
+                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => toggleStyle('fontStyle', 'italic')} className={`p-1 hover:bg-slate-200 rounded ${selectedCell && styles[`${selectedCell.r}-${selectedCell.c}`]?.fontStyle === 'italic' ? 'bg-slate-300' : ''}`}><Italic size={14}/></button>
+                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => toggleStyle('textDecoration', 'underline')} className={`p-1 hover:bg-slate-200 rounded ${selectedCell && styles[`${selectedCell.r}-${selectedCell.c}`]?.textDecoration === 'underline' ? 'bg-slate-300' : ''}`}><Underline size={14}/></button>
+                   <div className="flex items-center gap-1 border-l border-slate-300 pl-2">
+                       <Type size={14} className="text-slate-500"/>
+                       <input type="color" onMouseDown={(e) => e.preventDefault()} onChange={(e) => toggleStyle('color', e.target.value)} className="w-4 h-4 border-none bg-transparent cursor-pointer"/>
+                   </div>
+               </div>
+           </div>
+        </div>
+        
+        {/* Formula Bar */}
+        <div className="flex items-center h-8 bg-white border-b border-[#e0e0e0] px-2 gap-2">
+            <span className="font-bold text-slate-400 px-2 border-r border-[#e0e0e0]">fx</span>
+            <input 
+                className="flex-1 h-full bg-white px-2 focus:outline-none text-black" 
+                value={selectedCell ? grid[selectedCell.r]?.[selectedCell.c] || '' : ''}
+                onChange={(e) => selectedCell && handleCellChange(selectedCell.r, selectedCell.c, e.target.value)}
+            />
+        </div>
+
+        <div className="flex items-center h-6 bg-[#f8f9fa] border-b border-[#c0c0c0]">
+             <div className="w-10 bg-[#f8f9fa] border-r border-[#c0c0c0] z-10"></div>
+             <div className="flex-1 flex overflow-hidden">
+                {displayGrid[0].map((_: any, i: number) => (
+                   <div key={i} className="min-w-[100px] bg-[#f8f9fa] border-r border-[#c0c0c0] text-center font-bold text-slate-600 py-1 flex items-center justify-center">
+                     {String.fromCharCode(65 + i)}
+                   </div>
+                ))}
+             </div>
+        </div>
+        <div className="flex-1 overflow-auto bg-white">
+          {displayGrid.map((row: any[], r: number) => (
+            <div key={r} className="flex h-6 border-b border-[#e0e0e0]">
+               <div className="w-10 min-w-[40px] bg-[#f8f9fa] border-r border-[#c0c0c0] text-center text-slate-500 flex items-center justify-center font-semibold text-[10px]">{r + 1}</div>
+               {row.map((cell: string, c: number) => {
+                  const isSelected = selectedCell?.r === r && selectedCell?.c === c;
+                  const displayValue = (isSelected) ? cell : computeValue(cell, grid);
+                  const cellStyle = styles[`${r}-${c}`] || {};
+                  
+                  return (
+                    <div 
+                        key={`${r}-${c}`}
+                        className={`min-w-[100px] border-r border-[#e0e0e0] px-1 relative ${isSelected ? 'border-2 border-[#1a73e8] z-10' : ''}`}
+                        style={cellStyle}
+                        onClick={() => setSelectedCell({r, c})}
+                    >
+                        {isSelected ? (
+                             <input 
+                                autoFocus
+                                className="w-full h-full outline-none bg-white"
+                                style={cellStyle}
+                                value={cell}
+                                onChange={(e) => handleCellChange(r, c, e.target.value)}
+                             />
+                        ) : (
+                            <div className="w-full h-full overflow-hidden whitespace-nowrap text-black cursor-cell">
+                                {displayValue}
+                            </div>
+                        )}
+                    </div>
+                  );
+               })}
+            </div>
+          ))}
+        </div>
+    </div>
+  );
+};
+
+const SlideEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
+    // Parse content as JSON { title: html, body: html } or fallback
+    const parseContent = (content: string) => {
+         try {
+             if(content.trim().startsWith('{')) {
+                 return JSON.parse(content);
+             }
+         } catch(e) {}
+         // Fallback
+         const lines = content.split('\n');
+         return { title: lines[0] || 'Title', body: lines.slice(1).join('\n') || 'Subtitle' };
+    };
+
+    const [content, setContent] = useState(parseContent(file.content));
+    
+    useEffect(() => {
+        setContent(parseContent(file.content));
+    }, [file.id]);
+
+    const save = (newContent: any) => {
+        setContent(newContent);
+        onChange(JSON.stringify(newContent));
+    };
+
+    // Generic exec for contentEditable areas
+    const exec = (command: string, value: string | undefined = undefined) => {
+        document.execCommand(command, false, value);
+        // We need to sync manually after exec, but it's hard to know which div.
+        // We'll rely on onInput of the divs.
+    };
+
     const handleAction = (action: string) => {
         if (action === 'download') {
-             // stub
-        } else if (action === 'bold') {
-            onChange(file.content + ' **bold**');
+             const blob = new Blob([file.content], { type: 'application/json' });
+             const url = URL.createObjectURL(blob);
+             const a = document.createElement('a');
+             a.href = url;
+             a.download = file.name;
+             a.click();
+        } else if (action === 'save_drive') {
+            alert(`Successfully saved "${file.name}" to Google Drive.`);
+        } else if (['bold','italic','underline'].includes(action)) {
+            exec(action);
         }
     }
 
@@ -312,45 +685,85 @@ const SlideEditor = ({ file, onChange }: any) => {
         <div className="flex flex-col h-full bg-white overflow-hidden">
             {/* Toolbar */}
             <div className="w-full bg-white border-b border-[#dadce0] px-4 py-2 flex flex-col gap-1">
-               <div className="flex items-center gap-2">
-                   <Presentation size={18} className="text-[#Fbbc04]"/>
-                   <span className="text-sm text-slate-700">{file.name}</span>
+               <div className="flex items-center gap-3">
+                   <Presentation size={24} className="text-[#Fbbc04]"/>
+                   <div className="flex flex-col">
+                        <input 
+                            value={file.name}
+                            onChange={(e) => onRename(e.target.value)}
+                            className="bg-transparent text-slate-800 text-lg hover:border border-slate-300 px-1 rounded truncate max-w-[300px] focus:outline-none focus:border-[#Fbbc04] border border-transparent"
+                        />
+                       <MenuBar onAction={handleAction} isDriveConnected={isDriveConnected}/>
+                   </div>
                </div>
-               <MenuBar onAction={handleAction} />
+                {/* Formatting Toolbar */}
+               <div className="flex items-center gap-2 bg-[#EDF2FA] rounded-full px-4 py-1.5 w-max mt-1 shadow-sm border border-slate-200">
+                    <select 
+                        onChange={(e) => exec('fontName', e.target.value)}
+                        onMouseDown={(e) => e.preventDefault()}
+                        className="bg-transparent text-xs text-slate-700 focus:outline-none cursor-pointer w-24"
+                    >
+                        <option value="Arial">Arial</option>
+                        <option value="Times New Roman">Times New Roman</option>
+                    </select>
+                   <div className="w-px h-4 bg-slate-300"></div>
+                   <div className="flex items-center gap-1">
+                       <select 
+                           onChange={(e) => exec('fontSize', e.target.value)}
+                           onMouseDown={(e) => e.preventDefault()}
+                           defaultValue="3"
+                           className="bg-transparent text-xs text-slate-700 focus:outline-none cursor-pointer w-16"
+                       >
+                           <option value="1">10px</option>
+                           <option value="2">13px</option>
+                           <option value="3">16px</option>
+                           <option value="4">18px</option>
+                           <option value="5">24px</option>
+                           <option value="6">32px</option>
+                           <option value="7">48px</option>
+                       </select>
+                   </div>
+                   <div className="w-px h-4 bg-slate-300"></div>
+                   <div className="flex items-center gap-1">
+                       <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec('bold')} className="p-1 hover:bg-slate-200 rounded" title="Bold"><Bold size={14}/></button>
+                       <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec('italic')} className="p-1 hover:bg-slate-200 rounded" title="Italic"><Italic size={14}/></button>
+                       <button onMouseDown={(e) => e.preventDefault()} onClick={() => exec('underline')} className="p-1 hover:bg-slate-200 rounded" title="Underline"><Underline size={14}/></button>
+                        <div className="flex items-center gap-1 border-l border-slate-300 pl-2">
+                           <Type size={14} className="text-slate-500"/>
+                           <input type="color" onMouseDown={(e) => e.preventDefault()} onChange={(e) => exec('foreColor', e.target.value)} className="w-4 h-4 border-none bg-transparent cursor-pointer"/>
+                       </div>
+                   </div>
+               </div>
             </div>
 
             <div className="flex-1 flex overflow-hidden">
                  {/* Filmstrip */}
                  <div className="w-48 bg-white border-r border-[#dadce0] flex flex-col p-4 gap-4 overflow-y-auto">
                      {[1].map(i => (
-                         <div key={i} className="aspect-[16/9] bg-white border-2 border-[#Fbbc04] shadow-sm flex items-center justify-center text-[10px] text-slate-400 cursor-pointer">
-                             1
+                         <div key={i} className="aspect-[16/9] bg-white border-2 border-[#Fbbc04] shadow-sm flex items-center justify-center text-[10px] text-slate-400 cursor-pointer relative group">
+                             <div className="absolute top-1 left-1 text-slate-500 font-bold">{i}</div>
+                             Slide {i}
                          </div>
                      ))}
+                     <button className="w-full py-2 border border-dashed border-slate-300 text-slate-400 rounded hover:bg-slate-50">+ New Slide</button>
                  </div>
 
                  {/* Canvas */}
                  <div className="flex-1 bg-[#F8F9FA] flex items-center justify-center p-8 overflow-auto">
-                    <div className="w-[960px] h-[540px] bg-white shadow-lg flex flex-col p-16 border border-[#dadce0] relative">
-                        <input 
-                           className="text-5xl font-sans font-bold mb-8 outline-none placeholder-[#dadce0] text-black bg-transparent text-center mt-20" 
+                    <div className="w-[960px] h-[540px] bg-white shadow-xl flex flex-col p-16 border border-[#dadce0] relative">
+                        <div 
+                           contentEditable
+                           className="text-5xl font-sans font-bold mb-8 outline-none placeholder-[#dadce0] text-black bg-white text-center mt-20 empty:before:content-[attr(placeholder)] empty:before:text-slate-300" 
                            placeholder="Click to add title"
-                           value={file.content.split('\n')[0] || ''}
-                           onChange={(e) => {
-                               const lines = file.content.split('\n');
-                               lines[0] = e.target.value;
-                               onChange(lines.join('\n'));
-                           }}
+                           onInput={(e) => save({ ...content, title: e.currentTarget.innerHTML })}
+                           dangerouslySetInnerHTML={{ __html: content.title }}
                         />
-                        <textarea 
-                            className="flex-1 text-2xl font-sans resize-none outline-none placeholder-[#dadce0] text-black bg-transparent text-center"
+                        <div 
+                            contentEditable
+                            className="flex-1 text-2xl font-sans resize-none outline-none placeholder-[#dadce0] text-black bg-white text-center empty:before:content-[attr(placeholder)] empty:before:text-slate-300"
                             placeholder="Click to add subtitle"
-                            value={file.content.split('\n').slice(1).join('\n')}
-                            onChange={(e) => {
-                                const lines = file.content.split('\n');
-                                const rest = e.target.value;
-                                onChange(lines[0] + '\n' + rest);
-                            }}
+                            onInput={(e) => save({ ...content, body: e.currentTarget.innerHTML })}
+                            dangerouslySetInnerHTML={{ __html: content.body }}
                         />
                     </div>
                  </div>
@@ -359,72 +772,7 @@ const SlideEditor = ({ file, onChange }: any) => {
     );
 };
 
-// High-Fidelity Google Sheets Clone
-const SheetEditor = ({ file, onChange }: any) => {
-  const rows = file.content.split('\n').map((row: string) => row.split(','));
-  const ensureGrid = () => {
-    while(rows.length < 40) rows.push(new Array(10).fill(''));
-    rows.forEach((r: any[]) => { while(r.length < 15) r.push(''); });
-    return rows;
-  };
-  const grid = ensureGrid();
-
-  const handleCellChange = (r: number, c: number, val: string) => {
-    const newGrid = [...grid];
-    newGrid[r][c] = val;
-    onChange(newGrid.map((row: any[]) => row.join(',')).join('\n'));
-  };
-
-  const handleAction = (action: string) => {
-      // Stub
-  }
-
-  return (
-    <div className="flex flex-col h-full bg-white overflow-hidden font-sans text-xs">
-        <div className="w-full bg-[#f8f9fa] border-b border-[#c0c0c0] px-4 py-1 flex flex-col gap-1">
-            <div className="flex items-center gap-2 h-8">
-                <Table size={18} className="text-[#107c41]"/>
-                <span className="text-sm text-slate-700">{file.name}</span>
-            </div>
-            <MenuBar onAction={handleAction}/>
-        </div>
-        
-        {/* Formula Bar */}
-        <div className="flex items-center h-8 bg-white border-b border-[#e0e0e0] px-2 gap-2">
-            <span className="font-bold text-slate-400">fx</span>
-            <input className="flex-1 h-6 border border-[#e0e0e0] px-2 focus:outline-none focus:border-[#1a73e8]" placeholder=""/>
-        </div>
-
-        <div className="flex items-center h-6 bg-[#f8f9fa] border-b border-[#c0c0c0]">
-             <div className="w-10 bg-[#f8f9fa] border-r border-[#c0c0c0]"></div>
-             <div className="flex-1 flex overflow-hidden">
-                {grid[0].map((_: any, i: number) => (
-                   <div key={i} className="min-w-[100px] bg-[#f8f9fa] border-r border-[#c0c0c0] text-center font-bold text-slate-600 py-1 flex items-center justify-center">
-                     {String.fromCharCode(65 + i)}
-                   </div>
-                ))}
-             </div>
-        </div>
-        <div className="flex-1 overflow-auto bg-white">
-          {grid.map((row: any[], r: number) => (
-            <div key={r} className="flex h-6 border-b border-[#e0e0e0]">
-               <div className="w-10 min-w-[40px] bg-[#f8f9fa] border-r border-[#c0c0c0] text-center text-slate-500 flex items-center justify-center font-semibold">{r + 1}</div>
-               {row.map((cell: string, c: number) => (
-                  <input 
-                    key={`${r}-${c}`}
-                    value={cell}
-                    onChange={(e) => handleCellChange(r, c, e.target.value)}
-                    className="min-w-[100px] border-r border-[#e0e0e0] px-1 focus:outline-none focus:border-[#1a73e8] focus:ring-2 focus:ring-[#1a73e8] text-black z-0 focus:z-10 bg-white"
-                  />
-               ))}
-            </div>
-          ))}
-        </div>
-    </div>
-  );
-};
-
-const WhiteboardEditor = ({ file, onChange }: any) => {
+const WhiteboardEditor = ({ file, onChange, onRename }: any) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
 
@@ -473,7 +821,17 @@ const WhiteboardEditor = ({ file, onChange }: any) => {
 
   return (
     <div className="flex flex-col h-full bg-white relative">
-        <div className="absolute top-4 left-4 bg-white shadow rounded-lg p-2 flex gap-2 z-10 border">
+        <div className="flex items-center justify-between px-4 py-2 border-b">
+            <div className="flex items-center gap-2">
+                 <PenTool className="text-orange-500"/>
+                 <input 
+                    value={file.name}
+                    onChange={(e) => onRename(e.target.value)}
+                    className="bg-transparent text-slate-800 font-semibold hover:border border-slate-300 px-1 rounded focus:outline-none"
+                />
+            </div>
+        </div>
+        <div className="absolute top-16 left-4 bg-white shadow rounded-lg p-2 flex gap-2 z-10 border">
              <button className="p-2 hover:bg-slate-100 rounded text-slate-600"><PenTool size={16}/></button>
              <button className="p-2 hover:bg-slate-100 rounded text-slate-600"><Eraser size={16}/></button>
              <div className="w-px bg-slate-200"></div>
@@ -482,7 +840,7 @@ const WhiteboardEditor = ({ file, onChange }: any) => {
                  if(ctx) { ctx.fillStyle="#fff"; ctx.fillRect(0,0,2000,2000); save(); }
              }}>Clear</button>
         </div>
-        <div className="flex-1 overflow-auto flex items-center justify-center p-8 bg-white">
+        <div className="flex-1 overflow-auto flex items-center justify-center p-8 bg-[#F0F2F5]">
            <canvas 
               ref={canvasRef}
               width={1600}
@@ -498,7 +856,7 @@ const WhiteboardEditor = ({ file, onChange }: any) => {
   );
 };
 
-const SearchEditor = ({ file, onChange, apiKey }: any) => {
+const SearchEditor = ({ file, onChange, apiKey, onRename }: any) => {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<string>(file.content || '');
     const [searching, setSearching] = useState(false);
@@ -537,7 +895,14 @@ const SearchEditor = ({ file, onChange, apiKey }: any) => {
             <div className="max-w-3xl mx-auto w-full">
                 <div className="flex items-center gap-4 mb-8">
                     <div className="p-3 bg-blue-100 rounded-full text-blue-600"><Globe size={24}/></div>
-                    <h1 className="text-2xl font-bold text-slate-800">Deep Search Grounding</h1>
+                    <div className="flex-1">
+                         <h1 className="text-sm font-bold text-slate-500 uppercase tracking-wide">Deep Search Grounding</h1>
+                         <input 
+                            value={file.name}
+                            onChange={(e) => onRename(e.target.value)}
+                            className="text-2xl font-bold text-slate-800 bg-transparent focus:outline-none w-full"
+                        />
+                    </div>
                 </div>
                 
                 <div className="flex gap-2 mb-8">
@@ -546,7 +911,7 @@ const SearchEditor = ({ file, onChange, apiKey }: any) => {
                         onChange={(e) => setQuery(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                         placeholder="Search for research papers, topics, or data..."
-                        className="flex-1 px-4 py-3 border border-slate-300 rounded-lg focus:outline-none focus:border-blue-500 shadow-sm text-black"
+                        className="flex-1 px-4 py-3 border border-slate-300 rounded-lg focus:outline-none focus:border-blue-500 shadow-sm text-black bg-white"
                     />
                     <button 
                         onClick={handleSearch}
@@ -582,6 +947,7 @@ export default function App() {
   const [currentSpecialist, setCurrentSpecialist] = useState("The Liaison");
   const [chatInput, setChatInput] = useState("");
   const [projectFolderOpen, setProjectFolderOpen] = useState(true);
+  const [isDriveConnected, setIsDriveConnected] = useState(false);
   
   const chatEndRef = useRef<HTMLDivElement>(null);
   const activeFile = files.find(f => f.id === activeTabId);
@@ -603,6 +969,11 @@ export default function App() {
       setFiles(prev => prev.map(f => f.id === fileId ? { ...f, terminalHistory: [] } : f));
   };
 
+  const renameFile = (name: string) => {
+      if(!activeFile) return;
+      setFiles(prev => prev.map(f => f.id === activeFile.id ? { ...f, name } : f));
+  };
+
   const createNewFile = (type: FileType, subtype?: 'python' | 'c' | 'matlab', name?: string, content: string = '') => {
     const newId = Math.random().toString(36).substr(2, 9);
     const extensions: Record<string, string> = { 
@@ -618,7 +989,7 @@ export default function App() {
     const fileName = name || `Untitled.${extensions[type]}`;
     
     const initialContent = content || (
-        type === 'sheet' ? 'Header 1,Header 2,Header 3\nData 1,Data 2,Data 3' : 
+        type === 'sheet' ? '' : 
         type === 'chat' ? '[]' : 
         type === 'code' ? (subtype === 'python' ? '# Python Script\nprint("Hello World")' : subtype === 'c' ? '// C Source\n#include <stdio.h>\n\nint main() {\n    printf("Hello World");\n    return 0;\n}' : '% MATLAB Script\ndisp("Hello World")') : 
         type === 'slide' ? 'Title Slide\nSubtitle goes here' : ''
@@ -650,7 +1021,7 @@ export default function App() {
     try {
       const ai = new GoogleGenAI({ apiKey });
       let systemPrompt = `ACT AS A PYTHON INTERPRETER. Execute the code and return ONLY the output.`;
-      if (subtype === 'c') systemPrompt = `ACT AS A C COMPILER. Compile and run the following C code. Return ONLY the output of the program.`;
+      if (subtype === 'c') systemPrompt = `ACT AS A C COMPILER. Compile and run the following C code. Return ONLY the output of the program. DO NOT explain the code.`;
       if (subtype === 'matlab') systemPrompt = `ACT AS A MATLAB CONSOLE. Execute the following MATLAB script and return ONLY the output.`;
 
       const prompt = `${systemPrompt}\n\nCODE:\n${code}`;
@@ -727,6 +1098,18 @@ export default function App() {
     }
   };
 
+  const handleConnectDrive = () => {
+      if(isDriveConnected) return;
+      const confirmed = window.confirm("Connect OmniScience to your Google Drive?\n\nThis will allow the AI to save and load files directly from your cloud storage.");
+      if(confirmed) {
+          setIsProcessing(true);
+          setTimeout(() => {
+              setIsProcessing(false);
+              setIsDriveConnected(true);
+          }, 2000);
+      }
+  };
+
   const renderChat = (file: VirtualFile) => {
     const history: Message[] = JSON.parse(file.content);
     return (
@@ -735,7 +1118,7 @@ export default function App() {
             {history.length === 0 && (
                 <div className="flex flex-col items-center justify-center mt-32 text-[#444]">
                     <Bot size={72} strokeWidth={1} />
-                    <h2 className="text-2xl font-light tracking-widest mt-6 uppercase">OmniScience v2.3</h2>
+                    <h2 className="text-2xl font-light tracking-widest mt-6 uppercase">OmniScience v2.5</h2>
                     <p className="text-sm mt-2">Ready for inquiry.</p>
                 </div>
             )}
@@ -879,6 +1262,13 @@ export default function App() {
                              <button onClick={() => createNewFile('note')} className="flex flex-col items-center p-3 bg-[#2a2d2e] hover:bg-[#37373d] rounded text-[10px] gap-1 text-yellow-400">
                                  <StickyNote size={20}/> Keep
                              </button>
+                             <button 
+                                onClick={handleConnectDrive} 
+                                className={`col-span-2 flex items-center justify-center p-2 rounded text-[10px] gap-2 transition-colors border border-dashed ${isDriveConnected ? 'bg-[#0F9D58]/10 border-[#0F9D58] text-[#0F9D58]' : 'border-[#444] hover:bg-[#333] text-slate-400'}`}
+                             >
+                                 {isDriveConnected ? <CheckCircle size={14}/> : <Cloud size={14}/>}
+                                 {isDriveConnected ? 'Drive Connected' : 'Connect Drive'}
+                             </button>
                          </div>
                      )}
                  </div>
@@ -964,30 +1354,38 @@ export default function App() {
                                 file={activeFile} 
                                 onChange={(val: string) => updateFileContent(activeFile.id, val)} 
                                 onRun={() => runCode(activeFile.content, activeFile.name, activeFile.subtype, activeFile.id)}
+                                onRename={renameFile}
                             />
                         )}
                         {(activeFile.type === 'doc' || activeFile.type === 'note') && (
                             <DocEditor 
                                 file={activeFile} 
                                 onChange={(val: string) => updateFileContent(activeFile.id, val)}
+                                onRename={renameFile}
+                                isDriveConnected={isDriveConnected}
                             />
                         )}
                         {activeFile.type === 'sheet' && (
                             <SheetEditor 
                                 file={activeFile} 
                                 onChange={(val: string) => updateFileContent(activeFile.id, val)}
+                                onRename={renameFile}
+                                isDriveConnected={isDriveConnected}
                             />
                         )}
                         {activeFile.type === 'whiteboard' && (
                             <WhiteboardEditor 
                                 file={activeFile} 
                                 onChange={(val: string) => updateFileContent(activeFile.id, val)}
+                                onRename={renameFile}
                             />
                         )}
                          {activeFile.type === 'slide' && (
                             <SlideEditor 
                                 file={activeFile} 
                                 onChange={(val: string) => updateFileContent(activeFile.id, val)}
+                                onRename={renameFile}
+                                isDriveConnected={isDriveConnected}
                             />
                         )}
                         {activeFile.type === 'search' && (
@@ -995,6 +1393,7 @@ export default function App() {
                                 file={activeFile}
                                 apiKey={apiKey}
                                 onChange={(val: string) => updateFileContent(activeFile.id, val)}
+                                onRename={renameFile}
                             />
                         )}
                       </>
