@@ -274,7 +274,7 @@ const AssistantPanel = ({ file, apiKey, onApply, onClose }: { file: VirtualFile,
          if(file.type === 'doc') typeInstruction = "Output valid HTML code inside a ```html block to represent the document content.";
          if(file.type === 'sheet') typeInstruction = "Output valid CSV data inside a ```csv block.";
          if(file.type === 'code') typeInstruction = "Output the complete valid code inside a code block.";
-         if(file.type === 'slide') typeInstruction = "Output a JSON object { title: string, body: string } inside a ```json block.";
+         if(file.type === 'slide') typeInstruction = "Output a JSON object { slides: [{ title: string, body: string }] } inside a ```json block.";
 
          const prompt = `System: You are YANTRA's localized assistant. The user is working on the file: "${file.name}" (Type: ${file.type}).
          
@@ -1022,41 +1022,98 @@ const SheetEditor = ({ file, onChange, onRename, isDriveConnected, apiKey }: any
 
 const SlideEditor = ({ file, onChange, onRename, isDriveConnected, apiKey }: any) => {
     const [showAssistant, setShowAssistant] = useState(false);
-    // Parse content as JSON { title: html, body: html } or fallback
+    
+    // Data Structure: { slides: [{ id, title, body }] }
     const parseContent = (content: string) => {
          try {
              if(content.trim().startsWith('{')) {
-                 return JSON.parse(content);
+                 const parsed = JSON.parse(content);
+                 // Backward compatibility check or new structure
+                 if (parsed.slides && Array.isArray(parsed.slides)) {
+                     return parsed;
+                 } else if (parsed.title || parsed.body) {
+                     // Convert old single slide format to new array format
+                     return { slides: [{ id: '1', title: parsed.title || '', body: parsed.body || '' }] };
+                 }
              }
          } catch(e) {}
-         // Fallback
-         const lines = content.split('\n');
-         return { title: lines[0] || 'Title', body: lines.slice(1).join('\n') || 'Subtitle' };
+         // Fallback text content
+         return { slides: [{ id: '1', title: 'Title', body: 'Subtitle' }] };
     };
 
-    const [content, setContent] = useState(parseContent(file.content));
-    
+    const initialData = useMemo(() => parseContent(file.content), []);
+    const [slides, setSlides] = useState<any[]>(initialData.slides);
+    const [activeSlideIndex, setActiveSlideIndex] = useState(0);
+
+    // Refs for current slide content to avoid re-render cursor jumps
+    const titleRef = useRef<HTMLDivElement>(null);
+    const bodyRef = useRef<HTMLDivElement>(null);
+
+    // Sync from external changes (rare, usually just initial)
     useEffect(() => {
-        setContent(parseContent(file.content));
+        const newData = parseContent(file.content);
+        if (JSON.stringify(newData.slides) !== JSON.stringify(slides)) {
+            setSlides(newData.slides);
+            if(activeSlideIndex >= newData.slides.length) setActiveSlideIndex(0);
+        }
     }, [file.id]);
 
-    const save = (newContent: any) => {
-        setContent(newContent);
-        onChange(JSON.stringify(newContent));
+    // Update refs when active slide changes
+    useEffect(() => {
+        if (titleRef.current) titleRef.current.innerHTML = slides[activeSlideIndex]?.title || '';
+        if (bodyRef.current) bodyRef.current.innerHTML = slides[activeSlideIndex]?.body || '';
+    }, [activeSlideIndex, slides.length]); // Re-run when switching slides
+
+    const save = (newSlides: any[]) => {
+        setSlides(newSlides);
+        onChange(JSON.stringify({ slides: newSlides }));
     };
-    
+
+    const handleInput = (field: 'title' | 'body', value: string) => {
+        const newSlides = [...slides];
+        newSlides[activeSlideIndex] = { ...newSlides[activeSlideIndex], [field]: value };
+        // We do NOT setSlides here to avoid re-rendering the editor and losing cursor.
+        // We only persist to file.content.
+        // Actually, we SHOULD update state for consistency, but we must NOT bind value/dangerouslySetInnerHTML in the render.
+        // We will just update the ref's implicit state via the 'save' function which updates parent.
+        // But we need to keep local state 'slides' in sync for the sidebar thumbnail rendering.
+        
+        // Optimisation: Update local slides state but the Editor Divs are uncontrolled.
+        setSlides(newSlides);
+        onChange(JSON.stringify({ slides: newSlides }));
+    };
+
+    const addSlide = () => {
+        const newSlide = { id: Math.random().toString(36).substr(2, 5), title: 'New Slide', body: 'Click to add content' };
+        const newSlides = [...slides, newSlide];
+        setSlides(newSlides);
+        onChange(JSON.stringify({ slides: newSlides }));
+        setActiveSlideIndex(newSlides.length - 1);
+    };
+
     const handleAIApply = (text: string) => {
         try {
             const parsed = JSON.parse(text);
-            save(parsed);
+            if (parsed.slides) {
+                save(parsed.slides);
+            } else {
+                // Single slide update or unknown format
+                const newSlides = [...slides];
+                newSlides[activeSlideIndex] = { 
+                    ...newSlides[activeSlideIndex], 
+                    title: parsed.title || newSlides[activeSlideIndex].title,
+                    body: parsed.body || newSlides[activeSlideIndex].body
+                };
+                save(newSlides);
+                // Update refs manually to reflect AI change
+                if(titleRef.current) titleRef.current.innerHTML = newSlides[activeSlideIndex].title;
+                if(bodyRef.current) bodyRef.current.innerHTML = newSlides[activeSlideIndex].body;
+            }
         } catch(e) { console.error("Invalid AI JSON for slide"); }
     };
 
-    // Generic exec for contentEditable areas
     const exec = (command: string, value: string | undefined = undefined) => {
         document.execCommand(command, false, value);
-        // We need to sync manually after exec, but it's hard to know which div.
-        // We'll rely on onInput of the divs.
     };
 
     const handleAction = (action: string) => {
@@ -1137,32 +1194,44 @@ const SlideEditor = ({ file, onChange, onRename, isDriveConnected, apiKey }: any
 
             <div className="flex-1 flex overflow-hidden">
                  {/* Filmstrip */}
-                 <div className="w-48 bg-white border-r border-[#dadce0] flex flex-col p-4 gap-4 overflow-y-auto">
-                     {[1].map(i => (
-                         <div key={i} className="aspect-[16/9] bg-white border-2 border-[#Fbbc04] shadow-sm flex items-center justify-center text-[10px] text-slate-400 cursor-pointer relative group">
-                             <div className="absolute top-1 left-1 text-slate-500 font-bold">{i}</div>
-                             Slide {i}
+                 <div className="w-48 bg-white border-r border-[#dadce0] flex flex-col p-4 gap-4 overflow-y-auto shrink-0">
+                     {slides.map((slide: any, i: number) => (
+                         <div 
+                            key={i} 
+                            onClick={() => setActiveSlideIndex(i)}
+                            className={`aspect-[16/9] bg-white border-2 shadow-sm flex flex-col p-2 cursor-pointer relative group transition-all ${activeSlideIndex === i ? 'border-[#Fbbc04] ring-2 ring-[#Fbbc04]/20' : 'border-slate-200 hover:border-slate-300'}`}
+                         >
+                             <div className="absolute top-1 left-1 text-[10px] font-bold text-slate-500 bg-white/80 px-1 rounded">{i + 1}</div>
+                             <div className="text-[8px] font-bold truncate mt-4 pointer-events-none opacity-70" dangerouslySetInnerHTML={{__html: slide.title}}></div>
+                             <div className="text-[6px] text-slate-400 overflow-hidden mt-1 pointer-events-none opacity-50 flex-1" dangerouslySetInnerHTML={{__html: slide.body}}></div>
                          </div>
                      ))}
-                     <button className="w-full py-2 border border-dashed border-slate-300 text-slate-400 rounded hover:bg-slate-50">+ New Slide</button>
+                     <button 
+                        onClick={addSlide}
+                        className="w-full py-3 border border-dashed border-slate-300 text-slate-500 rounded hover:bg-slate-50 hover:border-slate-400 text-xs font-semibold flex items-center justify-center gap-2"
+                     >
+                        <Plus size={14}/> New Slide
+                     </button>
                  </div>
 
                  {/* Canvas */}
                  <div className="flex-1 bg-[#F8F9FA] flex items-center justify-center p-8 overflow-auto">
-                    <div className="w-[960px] h-[540px] bg-white shadow-xl flex flex-col p-16 border border-[#dadce0] relative">
+                    <div className="w-[960px] h-[540px] bg-white shadow-xl flex flex-col p-16 border border-[#dadce0] relative shrink-0">
                         <div 
+                           ref={titleRef}
                            contentEditable
                            className="text-5xl font-sans font-bold mb-8 outline-none placeholder-[#dadce0] text-black bg-white text-center mt-20 empty:before:content-[attr(placeholder)] empty:before:text-slate-300" 
                            placeholder="Click to add title"
-                           onInput={(e) => save({ ...content, title: e.currentTarget.innerHTML })}
-                           dangerouslySetInnerHTML={{ __html: content.title }}
+                           onInput={(e) => handleInput('title', e.currentTarget.innerHTML)}
+                           onMouseDown={(e) => e.stopPropagation()}
                         />
                         <div 
+                            ref={bodyRef}
                             contentEditable
                             className="flex-1 text-2xl font-sans resize-none outline-none placeholder-[#dadce0] text-black bg-white text-center empty:before:content-[attr(placeholder)] empty:before:text-slate-300"
                             placeholder="Click to add subtitle"
-                            onInput={(e) => save({ ...content, body: e.currentTarget.innerHTML })}
-                            dangerouslySetInnerHTML={{ __html: content.body }}
+                            onInput={(e) => handleInput('body', e.currentTarget.innerHTML)}
+                            onMouseDown={(e) => e.stopPropagation()}
                         />
                     </div>
                  </div>
@@ -1394,7 +1463,7 @@ export default function App() {
         type === 'sheet' ? '' : 
         type === 'chat' ? '[]' : 
         type === 'code' ? (subtype === 'python' ? '# Python Script\nprint("Hello World")' : subtype === 'c' ? '// C Source\n#include <stdio.h>\n\nint main() {\n    printf("Hello World");\n    return 0;\n}' : '% MATLAB Script\ndisp("Hello World")') : 
-        type === 'slide' ? 'Title Slide\nSubtitle goes here' : ''
+        type === 'slide' ? '{"slides":[{"id":"1","title":"Title Slide","body":"Subtitle goes here"}]}' : ''
     );
 
     const newFile: VirtualFile = {
