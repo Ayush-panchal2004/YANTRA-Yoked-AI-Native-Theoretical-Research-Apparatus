@@ -51,7 +51,8 @@ import {
   AlignRight,
   List,
   Cloud,
-  CheckCircle
+  CheckCircle,
+  Upload
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
@@ -248,40 +249,166 @@ const MenuBar = ({ onAction, isDriveConnected }: { onAction: (action: string, va
   );
 };
 
+// --- Assistant Panel ---
+
+const AssistantPanel = ({ file, apiKey, onApply, onClose }: { file: VirtualFile, apiKey: string, onApply: (c: string) => void, onClose: () => void }) => {
+  const [input, setInput] = useState('');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [loading, setLoading] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+      scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleSend = async () => {
+     if(!input.trim()) return;
+     const userText = input;
+     setInput('');
+     setMessages(prev => [...prev, { role: 'user', text: userText, timestamp: Date.now() }]);
+     setLoading(true);
+
+     try {
+         const ai = new GoogleGenAI({ apiKey });
+         let typeInstruction = "";
+         if(file.type === 'doc') typeInstruction = "Output valid HTML code inside a ```html block to represent the document content.";
+         if(file.type === 'sheet') typeInstruction = "Output valid CSV data inside a ```csv block.";
+         if(file.type === 'code') typeInstruction = "Output the complete valid code inside a code block.";
+         if(file.type === 'slide') typeInstruction = "Output a JSON object { title: string, body: string } inside a ```json block.";
+
+         const prompt = `System: You are YANTRA's localized assistant. The user is working on the file: "${file.name}" (Type: ${file.type}).
+         
+         CURRENT CONTENT PREVIEW (Truncated):
+         ${file.content.substring(0, 5000)}
+
+         INSTRUCTION:
+         If the user asks to generate, edit, or write content, you MUST provide the RESULTING CONTENT inside a code block (e.g., \`\`\`html ... \`\`\`).
+         ${typeInstruction}
+         If asking for generic help or explanation, just chat normally.
+         
+         User: ${userText}`;
+         
+         const response = await ai.models.generateContent({
+             model: 'gemini-3-pro-preview',
+             contents: prompt
+         });
+         
+         const text = response.text || "No response";
+         setMessages(prev => [...prev, { role: 'model', text, timestamp: Date.now() }]);
+     } catch(e: any) {
+         setMessages(prev => [...prev, { role: 'model', text: "Error: " + e.message, timestamp: Date.now() }]);
+     } finally {
+         setLoading(false);
+     }
+  };
+
+  const extractAndApply = (text: string) => {
+      // Robust extraction of code blocks
+      const match = text.match(/```(?:content|html|python|c|matlab|json|csv)?\s*([\s\S]*?)```/);
+      const content = match ? match[1] : text;
+      // Basic cleanup
+      onApply(content.trim());
+  };
+
+  return (
+      <div className="w-[350px] bg-[#1e1e1e] border-l border-[#333] flex flex-col h-full shadow-2xl z-20 shrink-0">
+          <div className="h-9 flex items-center justify-between px-3 bg-[#252526] border-b border-[#333]">
+              <div className="flex items-center gap-2 text-xs font-bold text-indigo-400">
+                  <Sparkles size={12}/> YANTRA ASSISTANT
+              </div>
+              <button onClick={onClose} className="hover:text-white text-slate-400"><X size={14}/></button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3 space-y-4">
+              {messages.length === 0 && (
+                  <div className="text-center text-slate-500 text-xs mt-10 p-4">
+                      <Bot size={24} className="mx-auto mb-2 opacity-50"/>
+                      <p>I can read this file and help you edit it.</p>
+                      <p className="mt-2 opacity-75">"Generate a summary..."</p>
+                      <p className="opacity-75">"Write a python script..."</p>
+                  </div>
+              )}
+              {messages.map((m, i) => (
+                  <div key={i} className={`flex flex-col gap-1 ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
+                      <div className={`text-xs p-2 rounded max-w-[90%] ${m.role === 'user' ? 'bg-indigo-900 text-white' : 'bg-[#333] text-slate-300'}`}>
+                          <ReactMarkdown>{m.text}</ReactMarkdown>
+                      </div>
+                      {m.role === 'model' && (
+                          <button 
+                             onClick={() => extractAndApply(m.text)}
+                             className="text-[10px] bg-[#252526] border border-[#444] text-green-400 px-2 py-0.5 rounded hover:bg-[#333] self-start flex items-center gap-1"
+                          >
+                             <CheckCircle size={10}/> Apply to File
+                          </button>
+                      )}
+                  </div>
+              ))}
+              {loading && <div className="text-xs text-slate-500 animate-pulse">Processing...</div>}
+              <div ref={scrollRef}></div>
+          </div>
+          <div className="p-2 border-t border-[#333]">
+              <div className="flex gap-2">
+                  <input 
+                      value={input} 
+                      onChange={e => setInput(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleSend()}
+                      placeholder={`Edit ${file.type}...`}
+                      className="flex-1 bg-[#252526] text-xs text-white px-2 py-1.5 rounded border border-[#333] focus:border-indigo-500 outline-none"
+                  />
+                  <button onClick={handleSend} className="bg-indigo-600 p-1.5 rounded text-white hover:bg-indigo-500"><Play size={12}/></button>
+              </div>
+          </div>
+      </div>
+  )
+}
+
 // --- Editors ---
 
-const CodeEditor = ({ file, onChange, onRun, onRename }: any) => (
-  <div className="flex flex-col h-full bg-[#1e1e1e]">
-      <div className="flex items-center justify-between p-2 bg-[#1e1e1e] border-b border-[#333] text-xs text-slate-400">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-indigo-400 flex items-center gap-2">
-                <Code2 size={12}/>
-                <input 
-                    value={file.name}
-                    onChange={(e) => onRename(e.target.value)}
-                    className="bg-transparent border-b border-transparent hover:border-slate-500 focus:border-indigo-500 focus:outline-none text-slate-300 w-32"
-                />
-            </span>
-            {file.subtype && <span className="bg-[#333] px-1 rounded text-[10px] text-slate-300 uppercase">{file.subtype}</span>}
+const CodeEditor = ({ file, onChange, onRun, onRename, apiKey }: any) => {
+  const [showAssistant, setShowAssistant] = useState(false);
+  
+  return (
+  <div className="flex h-full bg-[#1e1e1e] overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex items-center justify-between p-2 bg-[#1e1e1e] border-b border-[#333] text-xs text-slate-400">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-indigo-400 flex items-center gap-2">
+                    <Code2 size={12}/>
+                    <input 
+                        value={file.name}
+                        onChange={(e) => onRename(e.target.value)}
+                        className="bg-transparent border-b border-transparent hover:border-slate-500 focus:border-indigo-500 focus:outline-none text-slate-300 w-32"
+                    />
+                </span>
+                {file.subtype && <span className="bg-[#333] px-1 rounded text-[10px] text-slate-300 uppercase">{file.subtype}</span>}
+              </div>
+              <div className="flex items-center gap-2">
+                  <button onClick={onRun} className="flex items-center gap-1 px-3 py-1 bg-green-700 hover:bg-green-600 text-white rounded-sm transition-colors font-semibold">
+                    <Play size={10} fill="currentColor"/> Run
+                  </button>
+                  <button onClick={() => setShowAssistant(!showAssistant)} className={`p-1 rounded transition-colors ${showAssistant ? 'bg-indigo-600 text-white' : 'hover:bg-[#333] text-slate-400'}`}>
+                      <Sparkles size={14}/>
+                  </button>
+              </div>
           </div>
-          <button onClick={onRun} className="flex items-center gap-1 px-3 py-1 bg-green-700 hover:bg-green-600 text-white rounded-sm transition-colors font-semibold">
-            <Play size={10} fill="currentColor"/> Run
-          </button>
+          <div className="flex-1 relative">
+            <textarea 
+                value={file.content}
+                onChange={(e) => onChange(e.target.value)}
+                className="absolute inset-0 w-full h-full bg-[#1e1e1e] text-[#d4d4d4] font-mono text-sm p-4 resize-none focus:outline-none leading-6"
+                spellCheck={false}
+            />
+          </div>
       </div>
-      <div className="flex-1 relative">
-        <textarea 
-            value={file.content}
-            onChange={(e) => onChange(e.target.value)}
-            className="absolute inset-0 w-full h-full bg-[#1e1e1e] text-[#d4d4d4] font-mono text-sm p-4 resize-none focus:outline-none leading-6"
-            spellCheck={false}
-        />
-      </div>
+      {showAssistant && <AssistantPanel file={file} apiKey={apiKey} onApply={onChange} onClose={() => setShowAssistant(false)} />}
   </div>
-);
+  );
+};
 
 // High-Fidelity Google Docs Clone (Rich Text)
-const DocEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
+const DocEditor = ({ file, onChange, onRename, isDriveConnected, apiKey }: any) => {
   const contentRef = useRef<HTMLDivElement>(null);
+  const selectionRange = useRef<Range | null>(null);
+  const [showAssistant, setShowAssistant] = useState(false);
 
   // Initialize content once
   useEffect(() => {
@@ -301,8 +428,40 @@ const DocEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
       onChange(contentRef.current.innerHTML);
     }
   };
+  
+  const handleAIApply = (newContent: string) => {
+      // Append or replace? Let's insert at cursor if possible, else append
+      // For simplicity in this logic, we might just append if it's a block, or replace if empty.
+      // But user might want full rewrite.
+      // Let's try to execCommand insertHTML
+      if (contentRef.current) {
+          contentRef.current.focus();
+          // Restore selection not strictly needed if we just assume append or simplistic replacement
+          // But let's try to be smart.
+          document.execCommand('insertHTML', false, newContent);
+          handleInput();
+      }
+  };
+
+  const saveSelection = () => {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      selectionRange.current = sel.getRangeAt(0);
+    }
+  };
+
+  const restoreSelection = () => {
+    const sel = window.getSelection();
+    if (sel && selectionRange.current) {
+      sel.removeAllRanges();
+      sel.addRange(selectionRange.current);
+    }
+  };
 
   const exec = (command: string, value: string | undefined = undefined) => {
+      // Focus first to ensure execution context
+      if(contentRef.current) contentRef.current.focus();
+      restoreSelection();
       document.execCommand(command, false, value);
       handleInput(); // Sync change
   };
@@ -338,18 +497,24 @@ const DocEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#F0F2F5] overflow-y-auto items-center relative">
+    <div className="flex h-full overflow-hidden">
+    <div className="flex-1 flex flex-col bg-[#F0F2F5] overflow-y-auto items-center relative">
        {/* Top Header */}
        <div className="w-full bg-white border-b border-[#dadce0] px-4 py-2 sticky top-0 z-20 flex flex-col gap-1">
            <div className="flex items-center gap-3 mb-1">
               <FileText size={24} className="text-[#4285F4]"/>
-              <div className="flex flex-col">
-                  <input 
-                    value={file.name}
-                    onChange={(e) => onRename(e.target.value)}
-                    className="bg-transparent text-slate-800 text-lg hover:border border-slate-300 px-1 rounded truncate max-w-[300px] focus:outline-none focus:border-[#4285F4] border border-transparent"
-                  />
-                  <MenuBar onAction={handleAction} isDriveConnected={isDriveConnected}/>
+              <div className="flex-1 flex items-center justify-between">
+                  <div className="flex flex-col">
+                      <input 
+                        value={file.name}
+                        onChange={(e) => onRename(e.target.value)}
+                        className="bg-transparent text-slate-800 text-lg hover:border border-slate-300 px-1 rounded truncate max-w-[300px] focus:outline-none focus:border-[#4285F4] border border-transparent"
+                      />
+                      <MenuBar onAction={handleAction} isDriveConnected={isDriveConnected}/>
+                  </div>
+                  <button onClick={() => setShowAssistant(!showAssistant)} className={`p-2 rounded-full transition-colors ${showAssistant ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'}`}>
+                      <Sparkles size={18}/>
+                  </button>
               </div>
            </div>
            
@@ -357,7 +522,6 @@ const DocEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
            <div className="flex items-center gap-2 bg-[#EDF2FA] rounded-full px-4 py-1.5 w-max mt-1 shadow-sm border border-slate-200">
                <select 
                   onChange={(e) => exec('fontName', e.target.value)}
-                  onMouseDown={(e) => e.preventDefault()}
                   className="bg-transparent text-xs text-slate-700 focus:outline-none cursor-pointer w-24"
                >
                    <option value="Arial">Arial</option>
@@ -370,7 +534,6 @@ const DocEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
                <div className="flex items-center gap-1">
                    <select 
                        onChange={(e) => exec('fontSize', e.target.value)}
-                       onMouseDown={(e) => e.preventDefault()}
                        defaultValue="3"
                        className="bg-transparent text-xs text-slate-700 focus:outline-none cursor-pointer w-16"
                    >
@@ -381,6 +544,18 @@ const DocEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
                        <option value="5">24px</option>
                        <option value="6">32px</option>
                        <option value="7">48px</option>
+                   </select>
+               </div>
+               <div className="w-px h-4 bg-slate-300"></div>
+               <div className="flex items-center gap-1">
+                   <select 
+                        onChange={(e) => exec('formatBlock', e.target.value)}
+                        className="bg-transparent text-xs text-slate-700 focus:outline-none cursor-pointer w-24"
+                    >
+                        <option value="p">Normal Text</option>
+                        <option value="h1">Heading 1</option>
+                        <option value="h2">Heading 2</option>
+                        <option value="h3">Heading 3</option>
                    </select>
                </div>
                <div className="w-px h-4 bg-slate-300"></div>
@@ -408,53 +583,75 @@ const DocEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
               ref={contentRef}
               contentEditable
               onInput={handleInput}
+              onMouseUp={saveSelection}
+              onKeyUp={saveSelection}
               className="w-full h-full min-h-[800px] focus:outline-none prose max-w-none text-black font-sans empty:before:content-[attr(placeholder)] empty:before:text-slate-300"
               style={{ fontSize: '11pt' }}
               placeholder="Start typing..."
            />
        </div>
     </div>
+    {showAssistant && <AssistantPanel file={file} apiKey={apiKey} onApply={handleAIApply} onClose={() => setShowAssistant(false)} />}
+    </div>
   );
 };
 
 // High-Fidelity Google Sheets Clone (Functional)
-const SheetEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
+const SheetEditor = ({ file, onChange, onRename, isDriveConnected, apiKey }: any) => {
+  const [showAssistant, setShowAssistant] = useState(false);
   // Parsing logic for JSON-based sheet with styles or fallback to CSV
   const parseContent = (content: string) => {
       try {
           if (content.trim().startsWith('{')) {
               const data = JSON.parse(content);
               return { 
-                  grid: data.grid || Array(40).fill(Array(15).fill('')),
+                  grid: data.grid || Array(60).fill(Array(26).fill('')),
                   styles: data.styles || {}
               };
           }
       } catch (e) {}
       
       // Fallback CSV
-      const grid = content ? content.split('\n').map(row => row.split(',')) : Array(40).fill(Array(15).fill(''));
+      const grid = content ? content.split('\n').map(row => row.split(',')) : Array(60).fill(Array(26).fill(''));
       return { grid, styles: {} };
   };
 
   const { grid: initialGrid, styles: initialStyles } = useMemo(() => parseContent(file.content), []);
   const [grid, setGrid] = useState<string[][]>(initialGrid);
   const [styles, setStyles] = useState<Record<string, React.CSSProperties>>(initialStyles);
-  const [selectedCell, setSelectedCell] = useState<{r:number, c:number} | null>(null);
+  
+  // Selection State: { start: {r,c}, end: {r,c} }
+  const [selection, setSelection] = useState<{start: {r:number, c:number}, end: {r:number, c:number}} | null>(null);
+  const [activeCell, setActiveCell] = useState<{r:number, c:number} | null>(null); // The cell being edited or anchor
+  const [isEditing, setIsEditing] = useState(false);
+  const [dragStart, setDragStart] = useState<{r:number, c:number} | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Sync if external update
   useEffect(() => {
      const { grid: newGrid, styles: newStyles } = parseContent(file.content);
-     // Deep compare check simplified
      if (JSON.stringify(newGrid) !== JSON.stringify(grid)) {
          setGrid(newGrid);
          setStyles(newStyles);
      }
   }, [file.id]);
 
+  useEffect(() => {
+      if(isEditing && inputRef.current) {
+          inputRef.current.focus();
+      }
+  }, [isEditing]);
+
   const save = (newGrid: string[][], newStyles: Record<string, React.CSSProperties>) => {
       setGrid(newGrid);
       setStyles(newStyles);
       onChange(JSON.stringify({ grid: newGrid, styles: newStyles }));
+  };
+  
+  const handleAIApply = (newContent: string) => {
+     // AI returns CSV, parse and replace grid
+     const { grid: newGrid } = parseContent(newContent);
+     save(newGrid, styles); // Keep styles?
   };
 
   const getCellValue = (r: number, c: number, currentGrid: string[][]) => {
@@ -464,8 +661,13 @@ const SheetEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
       return val; 
   };
 
-  const computeValue = (cell: string, currentGrid: string[][]) => {
-      if (!cell || !cell.startsWith('=')) return cell;
+  // Robust recursive safe compute
+  const computeValue = (cell: string, currentGrid: string[][], stack: string[] = []) => {
+      if (!cell || !cell.toString().startsWith('=')) return cell;
+      
+      const formulaKey = cell;
+      if (stack.includes(formulaKey)) return "#CIRCULAR";
+      
       try {
           const formula = cell.substring(1).toUpperCase();
           const getRange = (range: string) => {
@@ -475,13 +677,19 @@ const SheetEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
              const end = parseRef(parts[1]);
              if(!start || !end) return [];
              let values = [];
-             for(let r=start.r; r<=end.r; r++) {
-                 for(let c=start.c; c<=end.c; c++) {
-                     values.push(getCellValue(r, c, currentGrid));
+             for(let r=Math.min(start.r, end.r); r<=Math.max(start.r, end.r); r++) {
+                 for(let c=Math.min(start.c, end.c); c<=Math.max(start.c, end.c); c++) {
+                     // Recursively resolve references for range values
+                     let raw = getCellValue(r, c, currentGrid);
+                     if(typeof raw === 'string' && raw.startsWith('=')) {
+                        raw = computeValue(raw, currentGrid, [...stack, formulaKey]);
+                     }
+                     values.push(raw);
                  }
              }
              return values;
           };
+          
           const parseRef = (ref: string) => {
               const match = ref.match(/([A-Z]+)([0-9]+)/);
               if(!match) return null;
@@ -511,14 +719,27 @@ const SheetEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
              const vals = getRange(range || '');
              return Math.max(...vals.map((v:any) => Number(v)));
           }
+          if (formula.startsWith('CONCAT(')) {
+             const args = formula.match(/CONCAT\((.*)\)/)?.[1]?.split(',');
+             if(!args) return "";
+             return args.map(a => a.trim().replace(/^"|"$/g, '')).join('');
+          }
 
           let parsed = formula.replace(/[A-Z]+[0-9]+/g, (match) => {
              const ref = parseRef(match);
-             if(ref) return String(getCellValue(ref.r, ref.c, currentGrid));
+             if(ref) {
+                 let val = getCellValue(ref.r, ref.c, currentGrid);
+                 // Resolve dependency
+                 if(typeof val === 'string' && val.startsWith('=')) {
+                     val = computeValue(val, currentGrid, [...stack, formulaKey]);
+                 }
+                 return isNaN(Number(val)) ? `"${val}"` : String(val);
+             }
              return "0";
           });
           
-          if (/^[0-9+\-*/().\s]+$/.test(parsed)) {
+          // Basic arithmetic safety check
+          if (/^[0-9+\-*/().\s"A-Za-z]+$/.test(parsed)) {
                // eslint-disable-next-line no-eval
                return eval(parsed);
           }
@@ -530,16 +751,23 @@ const SheetEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
 
   const handleCellChange = (r: number, c: number, val: string) => {
     const newGrid = [...grid.map(row => [...row])];
+    if(!newGrid[r]) newGrid[r] = [];
     newGrid[r][c] = val;
     save(newGrid, styles);
   };
 
   const toggleStyle = (styleKey: keyof React.CSSProperties, value: any) => {
-      if(!selectedCell) return;
-      const key = `${selectedCell.r}-${selectedCell.c}`;
-      const currentStyle = styles[key] || {};
-      const newStyle = { ...currentStyle, [styleKey]: currentStyle[styleKey] === value ? undefined : value };
-      const newStyles = { ...styles, [key]: newStyle };
+      if(!selection) return;
+      const {start, end} = selection;
+      const newStyles = { ...styles };
+      
+      for(let r=Math.min(start.r, end.r); r<=Math.max(start.r, end.r); r++) {
+          for(let c=Math.min(start.c, end.c); c<=Math.max(start.c, end.c); c++) {
+              const key = `${r}-${c}`;
+              const currentStyle = newStyles[key] || {};
+              newStyles[key] = { ...currentStyle, [styleKey]: currentStyle[styleKey] === value ? undefined : value };
+          }
+      }
       save(grid, newStyles);
   };
 
@@ -559,34 +787,144 @@ const SheetEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
       else if (action === 'underline') toggleStyle('textDecoration', 'underline');
   }
 
+  // --- Interaction Handlers ---
+
+  const handleMouseDown = (r: number, c: number, e: React.MouseEvent) => {
+      if(isEditing) return; // Don't disrupt editing if clicking inside
+      e.preventDefault();
+      setActiveCell({r, c});
+      setSelection({ start: {r, c}, end: {r, c} });
+      setDragStart({r, c});
+      setIsEditing(false);
+  };
+
+  const handleMouseEnter = (r: number, c: number) => {
+      if(dragStart) {
+          setSelection({ start: dragStart, end: {r, c} });
+      }
+  };
+
+  const handleMouseUp = () => {
+      setDragStart(null);
+  };
+
+  const handleDoubleClick = (r: number, c: number) => {
+      setActiveCell({r,c});
+      setSelection({ start: {r,c}, end: {r,c} });
+      setIsEditing(true);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+      if(!activeCell) return;
+      if(isEditing) {
+          if(e.key === 'Enter') {
+              e.preventDefault();
+              setIsEditing(false);
+              const nextR = Math.min(grid.length - 1, activeCell.r + 1);
+              setActiveCell({r: nextR, c: activeCell.c});
+              setSelection({start: {r: nextR, c: activeCell.c}, end: {r: nextR, c: activeCell.c}});
+              // Refocus grid container?
+          }
+          return;
+      }
+
+      let {r, c} = activeCell;
+      if(e.key === 'ArrowUp') r = Math.max(0, r - 1);
+      else if(e.key === 'ArrowDown') r = Math.min(grid.length - 1, r + 1);
+      else if(e.key === 'ArrowLeft') c = Math.max(0, c - 1);
+      else if(e.key === 'ArrowRight') c = Math.min(grid[0].length - 1, c + 1);
+      else if(e.key === 'Enter') {
+          e.preventDefault();
+          r = Math.min(grid.length - 1, r + 1);
+      } else if(e.key === 'Tab') {
+          e.preventDefault();
+          c = Math.min(grid[0].length - 1, c + 1);
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+          // Clear range
+          if(selection) {
+              const newGrid = [...grid.map(row => [...row])];
+              const {start, end} = selection;
+              for(let i=Math.min(start.r, end.r); i<=Math.max(start.r, end.r); i++) {
+                  for(let j=Math.min(start.c, end.c); j<=Math.max(start.c, end.c); j++) {
+                      if(newGrid[i]) newGrid[i][j] = '';
+                  }
+              }
+              save(newGrid, styles);
+          }
+          return;
+      } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+           // Start editing with this key
+           setIsEditing(true);
+           handleCellChange(r, c, e.key);
+           return;
+      } else {
+          return;
+      }
+
+      setActiveCell({r, c});
+      if(e.shiftKey && selection) {
+          // Expand selection from anchor (dragStart logic needed but usually anchor is start)
+          // Simplified: anchor at start, move end
+          setSelection({ ...selection, end: {r, c} });
+      } else {
+          setSelection({ start: {r,c}, end: {r,c} });
+      }
+  };
+
+
   // Ensure grid size
   const displayGrid = useMemo(() => {
      const temp = [...grid];
-     while(temp.length < 50) temp.push(Array(15).fill(''));
-     temp.forEach(r => { while(r.length < 15) r.push(''); });
+     // Add buffer
+     while(temp.length < 60) temp.push(Array(26).fill(''));
+     temp.forEach(r => { while(r.length < 26) r.push(''); });
      return temp;
   }, [grid]);
 
+  // Selection Overlay Calc
+  const selectionStyle = useMemo(() => {
+      if(!selection) return { display: 'none' };
+      const r1 = Math.min(selection.start.r, selection.end.r);
+      const c1 = Math.min(selection.start.c, selection.end.c);
+      const r2 = Math.max(selection.start.r, selection.end.r);
+      const c2 = Math.max(selection.start.c, selection.end.c);
+      
+      // Assuming fixed w/h for now (approx)
+      // Header: 40px w, 24px h. Cells: 100px w, 24px h.
+      const top = r1 * 25 + 1; // +1 border
+      const left = c1 * 101 + 1;
+      const width = (c2 - c1 + 1) * 101 - 1;
+      const height = (r2 - r1 + 1) * 25 - 1;
+      
+      return { top, left, width, height, display: 'block' };
+  }, [selection]);
+
   return (
-    <div className="flex flex-col h-full bg-white overflow-hidden font-sans text-xs">
+    <div className="flex h-full overflow-hidden">
+    <div className="flex-1 flex flex-col bg-white overflow-hidden font-sans text-xs outline-none" tabIndex={0} onKeyDown={handleKeyDown}>
         <div className="w-full bg-white border-b border-[#dadce0] px-4 py-2 flex flex-col gap-1">
             <div className="flex items-center gap-3">
                 <Table size={24} className="text-[#107c41]"/>
-                <div className="flex flex-col">
-                    <input 
-                        value={file.name}
-                        onChange={(e) => onRename(e.target.value)}
-                        className="bg-transparent text-slate-800 text-lg hover:border border-slate-300 px-1 rounded truncate max-w-[300px] focus:outline-none focus:border-[#107c41] border border-transparent"
-                    />
-                    <MenuBar onAction={handleAction} isDriveConnected={isDriveConnected}/>
+                <div className="flex-1 flex items-center justify-between">
+                    <div className="flex flex-col">
+                        <input 
+                            value={file.name}
+                            onChange={(e) => onRename(e.target.value)}
+                            className="bg-transparent text-slate-800 text-lg hover:border border-slate-300 px-1 rounded truncate max-w-[300px] focus:outline-none focus:border-[#107c41] border border-transparent"
+                        />
+                        <MenuBar onAction={handleAction} isDriveConnected={isDriveConnected}/>
+                    </div>
+                     <button onClick={() => setShowAssistant(!showAssistant)} className={`p-2 rounded-full transition-colors ${showAssistant ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'}`}>
+                        <Sparkles size={18}/>
+                    </button>
                 </div>
             </div>
              {/* Toolbar */}
            <div className="flex items-center gap-2 bg-[#EDF2FA] rounded-full px-4 py-1.5 w-max mt-1 shadow-sm border border-slate-200">
                <div className="flex items-center gap-1">
-                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => toggleStyle('fontWeight', 'bold')} className={`p-1 hover:bg-slate-200 rounded ${selectedCell && styles[`${selectedCell.r}-${selectedCell.c}`]?.fontWeight === 'bold' ? 'bg-slate-300' : ''}`}><Bold size={14}/></button>
-                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => toggleStyle('fontStyle', 'italic')} className={`p-1 hover:bg-slate-200 rounded ${selectedCell && styles[`${selectedCell.r}-${selectedCell.c}`]?.fontStyle === 'italic' ? 'bg-slate-300' : ''}`}><Italic size={14}/></button>
-                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => toggleStyle('textDecoration', 'underline')} className={`p-1 hover:bg-slate-200 rounded ${selectedCell && styles[`${selectedCell.r}-${selectedCell.c}`]?.textDecoration === 'underline' ? 'bg-slate-300' : ''}`}><Underline size={14}/></button>
+                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => toggleStyle('fontWeight', 'bold')} className={`p-1 hover:bg-slate-200 rounded`}><Bold size={14}/></button>
+                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => toggleStyle('fontStyle', 'italic')} className={`p-1 hover:bg-slate-200 rounded`}><Italic size={14}/></button>
+                   <button onMouseDown={(e) => e.preventDefault()} onClick={() => toggleStyle('textDecoration', 'underline')} className={`p-1 hover:bg-slate-200 rounded`}><Underline size={14}/></button>
                    <div className="flex items-center gap-1 border-l border-slate-300 pl-2">
                        <Type size={14} className="text-slate-500"/>
                        <input type="color" onMouseDown={(e) => e.preventDefault()} onChange={(e) => toggleStyle('color', e.target.value)} className="w-4 h-4 border-none bg-transparent cursor-pointer"/>
@@ -600,61 +938,90 @@ const SheetEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
             <span className="font-bold text-slate-400 px-2 border-r border-[#e0e0e0]">fx</span>
             <input 
                 className="flex-1 h-full bg-white px-2 focus:outline-none text-black" 
-                value={selectedCell ? grid[selectedCell.r]?.[selectedCell.c] || '' : ''}
-                onChange={(e) => selectedCell && handleCellChange(selectedCell.r, selectedCell.c, e.target.value)}
+                value={activeCell ? grid[activeCell.r]?.[activeCell.c] || '' : ''}
+                onChange={(e) => activeCell && handleCellChange(activeCell.r, activeCell.c, e.target.value)}
             />
         </div>
 
-        <div className="flex items-center h-6 bg-[#f8f9fa] border-b border-[#c0c0c0]">
-             <div className="w-10 bg-[#f8f9fa] border-r border-[#c0c0c0] z-10"></div>
-             <div className="flex-1 flex overflow-hidden">
-                {displayGrid[0].map((_: any, i: number) => (
-                   <div key={i} className="min-w-[100px] bg-[#f8f9fa] border-r border-[#c0c0c0] text-center font-bold text-slate-600 py-1 flex items-center justify-center">
-                     {String.fromCharCode(65 + i)}
-                   </div>
-                ))}
-             </div>
-        </div>
-        <div className="flex-1 overflow-auto bg-white">
-          {displayGrid.map((row: any[], r: number) => (
-            <div key={r} className="flex h-6 border-b border-[#e0e0e0]">
-               <div className="w-10 min-w-[40px] bg-[#f8f9fa] border-r border-[#c0c0c0] text-center text-slate-500 flex items-center justify-center font-semibold text-[10px]">{r + 1}</div>
-               {row.map((cell: string, c: number) => {
-                  const isSelected = selectedCell?.r === r && selectedCell?.c === c;
-                  const displayValue = (isSelected) ? cell : computeValue(cell, grid);
-                  const cellStyle = styles[`${r}-${c}`] || {};
-                  
-                  return (
-                    <div 
-                        key={`${r}-${c}`}
-                        className={`min-w-[100px] border-r border-[#e0e0e0] px-1 relative ${isSelected ? 'border-2 border-[#1a73e8] z-10' : ''}`}
-                        style={cellStyle}
-                        onClick={() => setSelectedCell({r, c})}
-                    >
-                        {isSelected ? (
-                             <input 
-                                autoFocus
-                                className="w-full h-full outline-none bg-white"
-                                style={cellStyle}
-                                value={cell}
-                                onChange={(e) => handleCellChange(r, c, e.target.value)}
-                             />
-                        ) : (
-                            <div className="w-full h-full overflow-hidden whitespace-nowrap text-black cursor-cell">
-                                {displayValue}
-                            </div>
-                        )}
-                    </div>
-                  );
-               })}
+        {/* Grid Container */}
+        <div className="flex-1 flex flex-col overflow-auto bg-white relative" onMouseUp={handleMouseUp}>
+            {/* Column Headers */}
+            <div className="flex h-6 bg-[#f8f9fa] border-b border-[#c0c0c0] sticky top-0 z-20">
+                 <div className="w-10 min-w-[40px] bg-[#f8f9fa] border-r border-[#c0c0c0] z-20 sticky left-0"></div>
+                 {displayGrid[0].map((_: any, i: number) => {
+                     const isSelected = selection && i >= Math.min(selection.start.c, selection.end.c) && i <= Math.max(selection.start.c, selection.end.c);
+                     return (
+                       <div key={i} className={`min-w-[100px] w-[100px] border-r border-[#c0c0c0] text-center font-bold text-[10px] py-1 flex items-center justify-center ${isSelected ? 'bg-[#e8f0fe] text-[#1a73e8]' : 'bg-[#f8f9fa] text-slate-600'}`}>
+                         {String.fromCharCode(65 + i)}
+                       </div>
+                     );
+                 })}
             </div>
-          ))}
+            
+            {/* Rows */}
+            <div className="relative">
+                {displayGrid.map((row: any[], r: number) => (
+                    <div key={r} className="flex h-[25px]">
+                        {/* Row Header */}
+                        <div className={`w-10 min-w-[40px] border-r border-[#c0c0c0] text-center text-[10px] flex items-center justify-center font-semibold sticky left-0 z-10 border-b border-[#e0e0e0] ${selection && r >= Math.min(selection.start.r, selection.end.r) && r <= Math.max(selection.start.r, selection.end.r) ? 'bg-[#e8f0fe] text-[#1a73e8]' : 'bg-[#f8f9fa] text-slate-500'}`}>{r + 1}</div>
+                        {row.map((cell: string, c: number) => {
+                            const cellStyle = styles[`${r}-${c}`] || {};
+                            const isActive = activeCell?.r === r && activeCell?.c === c;
+                            const displayValue = computeValue(cell, grid);
+
+                            return (
+                                <div 
+                                    key={`${r}-${c}`}
+                                    className="min-w-[100px] w-[100px] border-r border-b border-[#e0e0e0] px-1 relative cursor-cell"
+                                    style={cellStyle}
+                                    onMouseDown={(e) => handleMouseDown(r, c, e)}
+                                    onMouseEnter={() => handleMouseEnter(r, c)}
+                                    onDoubleClick={() => handleDoubleClick(r, c)}
+                                >
+                                    {isActive && isEditing ? (
+                                        <input 
+                                            ref={inputRef}
+                                            autoFocus
+                                            className="absolute inset-0 w-full h-full outline-none bg-white px-1 z-30"
+                                            style={cellStyle}
+                                            value={cell}
+                                            onChange={(e) => handleCellChange(r, c, e.target.value)}
+                                            onKeyDown={(e) => { e.stopPropagation(); if(e.key === 'Enter') { setIsEditing(false); handleKeyDown(e); } }}
+                                        />
+                                    ) : (
+                                        <div className="w-full h-full overflow-hidden whitespace-nowrap text-black pointer-events-none">
+                                            {displayValue}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                ))}
+
+                {/* Selection Overlay */}
+                {selection && (
+                    <div 
+                        className="absolute border-2 border-[#1a73e8] bg-[#1a73e8]/10 pointer-events-none z-10"
+                        style={{
+                            ...selectionStyle,
+                            left: (Number(selectionStyle.left) + 40) + 'px' // Offset for row header
+                        }}
+                    >
+                         {/* Anchor point handle */}
+                         <div className="absolute -bottom-1 -right-1 w-2 h-2 bg-[#1a73e8] border border-white cursor-crosshair pointer-events-auto"></div>
+                    </div>
+                )}
+            </div>
         </div>
+    </div>
+    {showAssistant && <AssistantPanel file={file} apiKey={apiKey} onApply={handleAIApply} onClose={() => setShowAssistant(false)} />}
     </div>
   );
 };
 
-const SlideEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
+const SlideEditor = ({ file, onChange, onRename, isDriveConnected, apiKey }: any) => {
+    const [showAssistant, setShowAssistant] = useState(false);
     // Parse content as JSON { title: html, body: html } or fallback
     const parseContent = (content: string) => {
          try {
@@ -676,6 +1043,13 @@ const SlideEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
     const save = (newContent: any) => {
         setContent(newContent);
         onChange(JSON.stringify(newContent));
+    };
+    
+    const handleAIApply = (text: string) => {
+        try {
+            const parsed = JSON.parse(text);
+            save(parsed);
+        } catch(e) { console.error("Invalid AI JSON for slide"); }
     };
 
     // Generic exec for contentEditable areas
@@ -701,18 +1075,24 @@ const SlideEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
     }
 
     return (
-        <div className="flex flex-col h-full bg-white overflow-hidden">
+        <div className="flex h-full overflow-hidden">
+        <div className="flex-1 flex flex-col bg-white overflow-hidden">
             {/* Toolbar */}
             <div className="w-full bg-white border-b border-[#dadce0] px-4 py-2 flex flex-col gap-1">
                <div className="flex items-center gap-3">
                    <Presentation size={24} className="text-[#Fbbc04]"/>
-                   <div className="flex flex-col">
-                        <input 
-                            value={file.name}
-                            onChange={(e) => onRename(e.target.value)}
-                            className="bg-transparent text-slate-800 text-lg hover:border border-slate-300 px-1 rounded truncate max-w-[300px] focus:outline-none focus:border-[#Fbbc04] border border-transparent"
-                        />
-                       <MenuBar onAction={handleAction} isDriveConnected={isDriveConnected}/>
+                   <div className="flex-1 flex items-center justify-between">
+                       <div className="flex flex-col">
+                            <input 
+                                value={file.name}
+                                onChange={(e) => onRename(e.target.value)}
+                                className="bg-transparent text-slate-800 text-lg hover:border border-slate-300 px-1 rounded truncate max-w-[300px] focus:outline-none focus:border-[#Fbbc04] border border-transparent"
+                            />
+                           <MenuBar onAction={handleAction} isDriveConnected={isDriveConnected}/>
+                       </div>
+                       <button onClick={() => setShowAssistant(!showAssistant)} className={`p-2 rounded-full transition-colors ${showAssistant ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'}`}>
+                            <Sparkles size={18}/>
+                       </button>
                    </div>
                </div>
                 {/* Formatting Toolbar */}
@@ -787,6 +1167,8 @@ const SlideEditor = ({ file, onChange, onRename, isDriveConnected }: any) => {
                     </div>
                  </div>
             </div>
+        </div>
+        {showAssistant && <AssistantPanel file={file} apiKey={apiKey} onApply={handleAIApply} onClose={() => setShowAssistant(false)} />}
         </div>
     );
 };
@@ -969,6 +1351,7 @@ export default function App() {
   const [isDriveConnected, setIsDriveConnected] = useState(false);
   
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const activeFile = files.find(f => f.id === activeTabId);
 
   // -- Helpers --
@@ -1127,6 +1510,46 @@ export default function App() {
               setIsDriveConnected(true);
           }, 2000);
       }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        const content = event.target?.result as string;
+        const name = file.name;
+        const ext = name.split('.').pop()?.toLowerCase();
+        
+        let type: FileType = 'doc';
+        let subtype: 'python' | 'c' | 'matlab' | undefined = undefined;
+
+        if (['py', 'js', 'ts', 'html', 'css', 'json'].includes(ext || '')) {
+            type = 'code';
+            if (ext === 'py') subtype = 'python';
+        } else if (ext === 'c' || ext === 'cpp' || ext === 'h') {
+            type = 'code';
+            subtype = 'c';
+        } else if (ext === 'm') {
+            type = 'code';
+            subtype = 'matlab';
+        } else if (ext === 'csv') {
+            type = 'sheet';
+        } else if (['png', 'jpg', 'jpeg', 'gif'].includes(ext || '')) {
+             type = 'whiteboard';
+        } else if (['doc', 'docx'].includes(ext || '')) {
+             type = 'doc';
+        }
+
+        createNewFile(type, subtype, name, content);
+    };
+
+    if (file.name.match(/\.(png|jpg|jpeg|gif)$/i)) {
+        reader.readAsDataURL(file);
+    } else {
+        reader.readAsText(file);
+    }
   };
 
   const renderChat = (file: VirtualFile) => {
@@ -1327,6 +1750,22 @@ export default function App() {
                      </button>
                  </div>
 
+                 {/* Upload File Button */}
+                 <div className="mt-2 px-3">
+                    <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        className="hidden" 
+                        onChange={handleFileUpload}
+                    />
+                     <button 
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-[#2a2d2e] hover:bg-[#37373d] text-[#cccccc] rounded-sm text-xs font-semibold shadow-sm transition-colors border border-[#444]"
+                     >
+                         <Upload size={14}/> Upload File
+                     </button>
+                 </div>
+
              </div>
          )}
          
@@ -1374,6 +1813,7 @@ export default function App() {
                                 onChange={(val: string) => updateFileContent(activeFile.id, val)} 
                                 onRun={() => runCode(activeFile.content, activeFile.name, activeFile.subtype, activeFile.id)}
                                 onRename={renameFile}
+                                apiKey={apiKey}
                             />
                         )}
                         {(activeFile.type === 'doc' || activeFile.type === 'note') && (
@@ -1382,6 +1822,7 @@ export default function App() {
                                 onChange={(val: string) => updateFileContent(activeFile.id, val)}
                                 onRename={renameFile}
                                 isDriveConnected={isDriveConnected}
+                                apiKey={apiKey}
                             />
                         )}
                         {activeFile.type === 'sheet' && (
@@ -1390,6 +1831,7 @@ export default function App() {
                                 onChange={(val: string) => updateFileContent(activeFile.id, val)}
                                 onRename={renameFile}
                                 isDriveConnected={isDriveConnected}
+                                apiKey={apiKey}
                             />
                         )}
                         {activeFile.type === 'whiteboard' && (
@@ -1405,6 +1847,7 @@ export default function App() {
                                 onChange={(val: string) => updateFileContent(activeFile.id, val)}
                                 onRename={renameFile}
                                 isDriveConnected={isDriveConnected}
+                                apiKey={apiKey}
                             />
                         )}
                         {activeFile.type === 'search' && (
@@ -1418,27 +1861,34 @@ export default function App() {
                       </>
                   ) : (
                       <div className="flex flex-col items-center justify-center h-full text-[#333]">
-                          <FolderOpen size={64} strokeWidth={1}/>
-                          <p className="mt-4 text-sm font-mono">No Active File</p>
+                          <FolderOpen size={64} className="mb-4 opacity-20"/>
+                          <p className="text-sm">No file is open.</p>
+                          <p className="text-xs mt-2 text-[#555]">Select a file from the explorer or create a new one.</p>
                       </div>
                   )}
               </div>
 
-              {/* Conditional Terminal: Only for Code Files */}
+              {/* Terminal Panel (Scoped) */}
               {activeFile?.type === 'code' && (
                   <div className="h-48 bg-[#1e1e1e] border-t border-[#333] flex flex-col">
-                      <div className="flex items-center justify-between px-4 py-1 bg-[#1e1e1e] border-b border-[#333]">
-                          <div className="flex gap-4 text-[10px] font-bold text-[#969696] uppercase tracking-wide">
-                              <span className="cursor-pointer border-b border-white text-white">Terminal</span>
-                              <span className="hover:text-white cursor-pointer">Output</span>
+                      <div className="flex items-center justify-between px-4 py-1 bg-[#252526] text-xs select-none">
+                          <div className="flex items-center gap-2">
+                              <span className="uppercase font-bold text-slate-400">Terminal</span>
+                              <span className="text-slate-600">|</span>
+                              <span className="text-slate-500">{activeFile.name}</span>
                           </div>
-                          <button onClick={() => clearTerminal(activeFile.id)} className="text-xs text-slate-500 hover:text-white"><Eraser size={12}/></button>
+                          <div className="flex items-center gap-2">
+                              <button onClick={() => clearTerminal(activeFile.id)} className="hover:text-white text-slate-500"><Trash2 size={12}/></button>
+                              <button onClick={() => {}} className="hover:text-white text-slate-500"><X size={12}/></button>
+                          </div>
                       </div>
-                      <div className="flex-1 overflow-y-auto p-3 font-mono text-xs space-y-1">
-                          {(!activeFile.terminalHistory || activeFile.terminalHistory.length === 0) && <div className="text-slate-600 italic">Ready for input...</div>}
-                          {activeFile.terminalHistory?.map((log) => (
-                              <div key={log.id} className={`${log.type === 'error' ? 'text-red-400' : log.type === 'success' ? 'text-green-400' : log.type === 'output' ? 'text-indigo-300' : 'text-slate-400'}`}>
-                                  <span className="opacity-40 mr-2 select-none">❯</span>
+                      <div className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1">
+                          {(!activeFile.terminalHistory || activeFile.terminalHistory.length === 0) && (
+                              <div className="text-slate-600 italic">Ready to execute. Click 'Run' to compile/interpret...</div>
+                          )}
+                          {activeFile.terminalHistory?.map(log => (
+                              <div key={log.id} className={`${log.type === 'error' ? 'text-red-400' : log.type === 'output' ? 'text-slate-300' : 'text-slate-500'}`}>
+                                  <span className="opacity-50 mr-2">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
                                   {log.content}
                               </div>
                           ))}
@@ -1446,19 +1896,24 @@ export default function App() {
                   </div>
               )}
           </div>
-          
-          {/* Status Bar */}
-          <div className="bg-[#007acc] text-white text-[11px] flex justify-between items-center px-2 select-none h-6">
-              <div className="flex gap-4 items-center">
-                  <span className="font-semibold flex items-center gap-1"><MonitorPlay size={10}/> YANTRA REMOTE</span>
-                  <span>{activeFile?.name || 'Empty Workspace'}</span>
-              </div>
-              <div className="flex gap-4 opacity-90">
-                   <span>UTF-8</span>
-                   <span>Gemini 3 Pro</span>
-              </div>
+      </div>
+
+      {/* Footer Status Bar */}
+      <div className="fixed bottom-0 w-full h-6 bg-[#007acc] text-white flex items-center px-3 text-[10px] select-none z-50">
+          <div className="flex items-center gap-4">
+              <div className="flex items-center gap-1 font-bold"><MonitorPlay size={12}/> YANTRA REMOTE</div>
+              <div className="flex items-center gap-1"><Share2 size={12}/> main*</div>
+              <div className="flex items-center gap-1"><CheckCircle size={12}/> 0 Errors</div>
+          </div>
+          <div className="flex-1"></div>
+          <div className="flex items-center gap-4">
+               <span>Ln 12, Col 45</span>
+               <span>UTF-8</span>
+               <span>{activeFile?.type === 'code' ? activeFile.subtype || 'Python' : 'Markdown'}</span>
+               <div className="flex items-center gap-1 hover:bg-[#1f8ad2] px-1 rounded cursor-pointer"><Settings size={12}/></div>
           </div>
       </div>
+
     </div>
   );
 }
