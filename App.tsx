@@ -502,7 +502,11 @@ const DocEditor = ({ file, onChange, onRename, isDriveConnected, apiKey }: any) 
        {/* Top Header */}
        <div className="w-full bg-white border-b border-[#dadce0] px-4 py-2 sticky top-0 z-20 flex flex-col gap-1">
            <div className="flex items-center gap-3 mb-1">
-              <FileText size={24} className="text-[#4285F4]"/>
+              {file.type === 'note' ? (
+                <StickyNote size={24} className="text-[#Fbbc04]"/>
+              ) : (
+                <FileText size={24} className="text-[#4285F4]"/>
+              )}
               <div className="flex-1 flex items-center justify-between">
                   <div className="flex flex-col">
                       <input 
