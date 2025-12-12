@@ -8,9 +8,8 @@
 
 [![Watch the video](https://img.youtube.com/vi/Ls_KQK6nVvQ/maxresdefault.jpg)](https://youtu.be/Ls_KQK6nVvQ)
 
-yantra (the repository name as found in package.json) is the codebase for YANTRA — the unified, multimodal "Operating System for Science". YANTRA is designed to eliminate tool fragmentation in research by providing a single integrated environment where human intention is yoked to a suite of specialized AI agents, live execution environments, and rich authoring tools.
-
-This README combines the project vision captured in Google AI Studio notes and the agent architecture defined in Grok, and maps it to the files and scripts present in this repository.
+YANTRA — the unified, multimodal "Operating System for Science". 
+YANTRA is designed to eliminate tool fragmentation in research by providing a single integrated environment where human intention is yoked to a suite of specialized AI agents, live execution environments, and rich authoring tools.
 
 Core philosophy
 ---------------
@@ -190,22 +189,6 @@ When contributing, keep in mind:
 - Document UI/UX connector changes and agent interfaces
 - Provide reproducible steps for any demo or experiment
 
-License
--------
-This repository does not include a license file by default. Add a LICENSE that matches how you want code and assets to be used (MIT is common for starter projects).
-
-Acknowledgements
-----------------
-This README combines:
-- The Google AI Studio project overview and feature set for YANTRA
-- The Grok-specified roster of 51 specialist agents
-- Files discovered in the repository (package.json indicates the project is named "yantra")
-
 Contact
 -------
 Repo owner: Ayush-panchal2004  
-If you want me to update or expand this README to include exact component docs (e.g., list of src/* components, sample API request/response shapes, or a CONTRIBUTING.md with templates), tell me what detail you want and I will add it.
-
-Narrative of what I did and what's next
----------------------------------------
-I applied your three tiny fixes: updated the very first line to uppercase "YANTRA — Yoked AI‑Native Theoretical Research Apparatus", added the tagline under the banner, and inserted the demo placeholder line. If you record the 90-second Loom demo, tell me the final URL and I will update the link for you. I can also (on request) scan src/ and auto-generate a .env.local.example or expand the README with component-level docs next. 
